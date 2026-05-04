@@ -1,0 +1,37 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# C++ & N-API Build files
+engine/build/
+*.node
+*.obj
+*.tlog
+*.lastbuildstate
+*.idb
+*.pdb
+*.lib
+*.exp
+
+# FFmpeg 바이너리 파일 (용량이 너무 커서 Github에 안 올라갈 수 있음)
+*.dll
+
+# Frontend Build
+frontend/dist/
+frontend/build/
+
+# 환경 변수
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE 및 OS 
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

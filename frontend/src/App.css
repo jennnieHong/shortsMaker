@@ -1,0 +1,116 @@
+/* App.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-dark: #0f0f11;
+  --bg-panel: #1a1a1e;
+  --bg-timeline: #141416;
+  --accent: #2563eb;
+  --accent-hover: #3b82f6;
+  --text-main: #f3f4f6;
+  --text-muted: #9ca3af;
+  --border: #27272a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  overflow: hidden;
+}
+
+.editor-container {
+  display: grid;
+  grid-template-rows: 60px 1fr 300px;
+  grid-template-columns: 350px 1fr 350px;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Header */
+.editor-header {
+  grid-column: 1 / -1;
+  background-color: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+}
+
+/* Sidebar Left (Assets/Templates) */
+.sidebar-left {
+  background-color: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* Main Preview Area */
+.preview-area {
+  background-color: var(--bg-dark);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  position: relative;
+}
+
+.canvas-container {
+  background-color: #000;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  border-radius: 8px;
+  overflow: hidden;
+  /* 9:16 aspect ratio for shorts */
+  width: 360px;
+  height: 640px;
+  position: relative;
+}
+
+/* Sidebar Right (Properties) */
+.sidebar-right {
+  background-color: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* Timeline */
+.timeline-area {
+  grid-column: 1 / -1;
+  background-color: var(--bg-timeline);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+/* UI Elements */
+.btn-primary {
+  background-color: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: var(--accent-hover);
+}
+
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 16px;
+}

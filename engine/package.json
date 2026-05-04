@@ -1,0 +1,13 @@
+{
+  "name": "video-engine",
+  "version": "1.0.0",
+  "description": "C++ Native Core Engine for ShortsMaker",
+  "main": "build/Release/video_engine.node",
+  "scripts": {
+    "build": "node-gyp configure && node-gyp build",
+    "rebuild": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0"
+  }
+}
