@@ -14,7 +14,8 @@
         "<(module_root_dir)/ffmpeg/lib/avformat.lib",
         "<(module_root_dir)/ffmpeg/lib/avutil.lib",
         "<(module_root_dir)/ffmpeg/lib/swscale.lib",
-        "<(module_root_dir)/ffmpeg/lib/swresample.lib"
+        "<(module_root_dir)/ffmpeg/lib/swresample.lib",
+        "<(module_root_dir)/ffmpeg/lib/avfilter.lib"
       ],
       "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
       "msvs_settings": {

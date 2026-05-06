@@ -31,12 +31,23 @@ app.on('window-all-closed', function () {
   if (process.platform !== 'darwin') app.quit();
 });
 
+const fs = require('fs');
+
 // 프론트엔드에서 비디오 렌더링 요청을 보냈을 때 실행되는 리스너
-ipcMain.handle('render-video', async (event, inputPath, outputPath) => {
+ipcMain.handle('render-video', async (event, clips, outputPath, overlayBase64) => {
   try {
-    console.log(`[Electron Main] 비디오 분석 요청 수신! (입력: ${inputPath})`);
-    // C++ 엔진의 renderVideo 함수를 2개의 인자로 호출합니다.
-    const result = engine.renderVideo(inputPath, outputPath);
+    console.log(`[Electron Main] 비디오 분석 요청 수신! (클립 수: ${clips.length})`);
+    
+    let overlayImagePath = "";
+    if (overlayBase64) {
+      overlayImagePath = path.join(__dirname, 'temp_overlay.png');
+      const base64Data = overlayBase64.replace(/^data:image\/png;base64,/, "");
+      fs.writeFileSync(overlayImagePath, base64Data, 'base64');
+      console.log('[Electron Main] 오버레이 PNG 임시 저장 완료:', overlayImagePath);
+    }
+    
+    // C++ 엔진의 renderVideo 함수를 호출합니다. (세 번째 인자로 overlayImagePath 전달)
+    const result = engine.renderVideo(clips, outputPath, overlayImagePath);
     console.log('[Electron Main] C++ 엔진 응답 완료:', result);
     return result;
   } catch (err) {

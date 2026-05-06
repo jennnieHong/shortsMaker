@@ -35,3 +35,8 @@ frontend/build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Output & Temp Media Files
+*.mp4
+temp_overlay.png
+output_shorts.mp4
