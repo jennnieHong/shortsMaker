@@ -273,28 +273,42 @@ function App() {
                     <div style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       🎥 {asset.name}
                     </div>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation(); // 클릭 이벤트 버블링 방지
-                        const newClip: TimelineClip = {
-                          id: Math.random().toString(36).substr(2, 9),
-                          assetId: asset.id,
-                          assetName: asset.name,
-                          path: asset.path,
-                          trimStart: 0, // 기본값 0초부터
-                          trimEnd: asset.duration ? Math.min(5, asset.duration) : 5,    // 최대 5초
-                          duration: asset.duration,
-                          cropX: 0.5,
-                          cropY: 0.5,
-                          scale: 1.0
-                        };
-                        setTimelineClips(prev => [...prev, newClip]);
-                        setSelectedTimelineClipId(newClip.id); // 추가 후 즉시 속성창에 띄우기
-                      }}
-                      style={{ marginLeft: '8px', padding: '4px 8px', fontSize: '10px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                    >
-                      타임라인 추가
-                    </button>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation(); // 클릭 이벤트 버블링 방지
+                          const newClip: TimelineClip = {
+                            id: Math.random().toString(36).substr(2, 9),
+                            assetId: asset.id,
+                            assetName: asset.name,
+                            path: asset.path,
+                            trimStart: 0, // 기본값 0초부터
+                            trimEnd: asset.duration ? Math.min(5, asset.duration) : 5,    // 최대 5초
+                            duration: asset.duration,
+                            cropX: 0.5,
+                            cropY: 0.5,
+                            scale: 1.0
+                          };
+                          setTimelineClips(prev => [...prev, newClip]);
+                          setSelectedTimelineClipId(newClip.id); // 추가 후 즉시 속성창에 띄우기
+                        }}
+                        style={{ marginLeft: '8px', padding: '4px 8px', fontSize: '10px', background: 'var(--accent)', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        title="타임라인에 추가"
+                      >
+                        + 추가
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAssets(prev => prev.filter(a => a.id !== asset.id));
+                          if (selectedAssetId === asset.id) setSelectedAssetId(null);
+                        }}
+                        style={{ padding: '4px 6px', fontSize: '10px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                        title="에셋 삭제"
+                      >
+                        X
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -367,25 +381,42 @@ function App() {
         >
           {/* Video Canvas Layer */}
           <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {activeClip ? (
-              <video 
-                ref={videoRef}
-                src={activeClip.path} 
-                style={{ 
-                  width: '100%', 
-                  height: '100%', 
-                  objectFit: 'cover', // 세로 화면에 꽉 차게 
-                  objectPosition: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`, // C++ 좌표와 매칭
-                  transform: `scale(${activeClip.scale || 1.0})`,
-                  transformOrigin: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`,
-                  transition: 'object-position 0.1s ease, transform 0.1s ease'
-                }}
-                onWaiting={() => setIsBuffering(true)}
-                onCanPlay={() => setIsBuffering(false)}
-              />
-            ) : (
-              <div style={{ color: '#666', fontSize: '14px' }}>타임라인에 영상을 올리고 재생해보세요.</div>
-            )}
+            {(() => {
+              const isAssetPreviewMode = selectedAssetId && !selectedTimelineClipId && !isPlaying;
+              const previewAsset = isAssetPreviewMode ? assets.find(a => a.id === selectedAssetId) : null;
+              
+              if (isAssetPreviewMode && previewAsset) {
+                return (
+                  <video 
+                    src={previewAsset.path} 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    controls={false}
+                  />
+                );
+              }
+
+              if (activeClip) {
+                return (
+                  <video 
+                    ref={videoRef}
+                    src={activeClip.path} 
+                    style={{ 
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'cover', // 세로 화면에 꽉 차게 
+                      objectPosition: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`, // C++ 좌표와 매칭
+                      transform: `scale(${activeClip.scale || 1.0})`,
+                      transformOrigin: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`,
+                      transition: 'object-position 0.1s ease, transform 0.1s ease'
+                    }}
+                    onWaiting={() => setIsBuffering(true)}
+                    onCanPlay={() => setIsBuffering(false)}
+                  />
+                );
+              }
+
+              return <div style={{ color: '#666', fontSize: '14px' }}>타임라인에 영상을 올리거나 에셋을 선택해보세요.</div>;
+            })()}
           </div>
           
            {/* 2. Konva Canvas for WYSIWYG editing (비디오 앞단 투명 레이어) */}
