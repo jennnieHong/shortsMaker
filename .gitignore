@@ -40,3 +40,6 @@ Thumbs.db
 *.mp4
 temp_overlay.png
 output_shorts.mp4
+
+*.txt
+*.bak

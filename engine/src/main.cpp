@@ -8,10 +8,12 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/display.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersrc.h>
 #include <libavfilter/buffersink.h>
 #include <libavutil/opt.h>
+#include <math.h>
 }
 
 struct ClipInfo {
@@ -184,9 +186,69 @@ public:
                 dec_ctx = avcodec_alloc_context3(dec);
                 avcodec_parameters_to_context(dec_ctx, in_video_stream->codecpar);
                 avcodec_open2(dec_ctx, dec, nullptr);
-                
-                int target_w = (dec_ctx->height * 9 / 16) & ~1; 
-                int target_h = dec_ctx->height & ~1;
+            }
+            
+            AVFilterGraph* rot_graph = nullptr;
+            AVFilterContext* rot_src = nullptr;
+            AVFilterContext* rot_sink = nullptr;
+            AVFrame* rot_frame = nullptr;
+
+            if (in_video_stream) {
+                int32_t* displaymatrix = nullptr;
+                for (int i = 0; i < in_video_stream->codecpar->nb_coded_side_data; i++) {
+                    if (in_video_stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DISPLAYMATRIX) {
+                        displaymatrix = (int32_t*)in_video_stream->codecpar->coded_side_data[i].data;
+                        break;
+                    }
+                }
+                double theta = 0;
+                if (displaymatrix) {
+                    theta = -av_display_rotation_get(displaymatrix);
+                    if (theta > 180) theta -= 360;
+                    else if (theta < -180) theta += 360;
+                }
+
+                int dec_w = dec_ctx->width;
+                int dec_h = dec_ctx->height;
+
+                if (theta == 90 || theta == -90 || theta == 180 || theta == -180) {
+                    rot_graph = avfilter_graph_alloc();
+                    rot_frame = av_frame_alloc();
+                    char args[512];
+                    snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+                             dec_ctx->width, dec_ctx->height, dec_ctx->pix_fmt, 
+                             in_video_stream->time_base.num, in_video_stream->time_base.den, 1, 1);
+                    
+                    const AVFilter* src_flt  = avfilter_get_by_name("buffer");
+                    const AVFilter* sink_flt = avfilter_get_by_name("buffersink");
+                    avfilter_graph_create_filter(&rot_src, src_flt, "in", args, nullptr, rot_graph);
+                    avfilter_graph_create_filter(&rot_sink, sink_flt, "out", nullptr, nullptr, rot_graph);
+
+                    std::string filter_str = "";
+                    if (theta == 90) { filter_str = "transpose=1"; dec_w = dec_ctx->height; dec_h = dec_ctx->width; }
+                    else if (theta == -90) { filter_str = "transpose=2"; dec_w = dec_ctx->height; dec_h = dec_ctx->width; }
+                    else if (theta == 180 || theta == -180) { filter_str = "hflip,vflip"; }
+
+                    AVFilterInOut* inputs  = avfilter_inout_alloc();
+                    AVFilterInOut* outputs = avfilter_inout_alloc();
+                    outputs->name       = av_strdup("in");
+                    outputs->filter_ctx = rot_src;
+                    outputs->pad_idx    = 0;
+                    outputs->next       = nullptr;
+                    inputs->name       = av_strdup("out");
+                    inputs->filter_ctx = rot_sink;
+                    inputs->pad_idx    = 0;
+                    inputs->next       = nullptr;
+
+                    avfilter_graph_parse_ptr(rot_graph, filter_str.c_str(), &inputs, &outputs, nullptr);
+                    avfilter_graph_config(rot_graph, nullptr);
+                    
+                    avfilter_inout_free(&inputs);
+                    avfilter_inout_free(&outputs);
+                }
+
+                int target_w = (dec_h * 9 / 16) & ~1; 
+                int target_h = dec_h & ~1;
                 sws_ctx = sws_getContext(target_w, target_h, dec_ctx->pix_fmt,
                                          720, 1280, AV_PIX_FMT_YUV420P,
                                          SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -217,8 +279,17 @@ public:
                                 break;
                             }
                             
-                            int in_w = dec_ctx->width;
-                            int in_h = dec_ctx->height;
+                            AVFrame* proc_frame = frame;
+                            if (rot_graph) {
+                                if (av_buffersrc_add_frame_flags(rot_src, frame, AV_BUFFERSRC_FLAG_KEEP_REF) >= 0) {
+                                    if (av_buffersink_get_frame(rot_sink, rot_frame) >= 0) {
+                                        proc_frame = rot_frame;
+                                    }
+                                }
+                            }
+                            
+                            int in_w = proc_frame->width;
+                            int in_h = proc_frame->height;
                             int target_w = (in_h * 9 / 16) & ~1; 
                             
                             // Scale에 따라 잘라낼 실제 원본 픽셀 영역 크기 축소 (줌인 효과)
@@ -241,8 +312,8 @@ public:
                             uint8_t* src_data[4];
                             int src_linesize[4];
                             for(int i=0; i<4; i++) {
-                                src_data[i] = frame->data[i];
-                                src_linesize[i] = frame->linesize[i];
+                                src_data[i] = proc_frame->data[i];
+                                src_linesize[i] = proc_frame->linesize[i];
                             }
                             if (src_data[0] != nullptr) {
                                 src_data[0] += crop_y * src_linesize[0] + crop_x;
@@ -284,6 +355,7 @@ public:
                                     }
                                 }
                             }
+                            if (rot_frame) av_frame_unref(rot_frame);
                         }
                     }
                 }
@@ -311,6 +383,8 @@ public:
 
             av_packet_free(&pkt);
             av_frame_free(&frame);
+            if (rot_frame) av_frame_free(&rot_frame);
+            if (rot_graph) avfilter_graph_free(&rot_graph);
             if (sws_ctx) sws_freeContext(sws_ctx);
             if (dec_ctx) avcodec_free_context(&dec_ctx);
             avformat_close_input(&ifmt_ctx);
