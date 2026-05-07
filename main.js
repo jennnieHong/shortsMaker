@@ -76,7 +76,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
         }
         
         const cleanText = clip.text.replace(/\n/g, '\\N');
-        assContent += `Dialogue: 0,${start},${end},Default,,0,0,0,,{\\pos(${x},${y})\\c&H${bgr}&\\fs${fontSize}}${cleanText}\n`;
+        const trackIdx = clip.trackIndex || 0;
+        assContent += `Dialogue: ${trackIdx},${start},${end},Default,,0,0,0,,{\\pos(${x},${y})\\c&H${bgr}&\\fs${fontSize}}${cleanText}\n`;
       });
 
       fs.writeFileSync(overlayImagePath, assContent, 'utf8');
