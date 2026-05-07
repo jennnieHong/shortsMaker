@@ -828,8 +828,8 @@ function App() {
           style={{ flex: 1, padding: '20px', overflowX: 'auto', position: 'relative', cursor: 'text' }}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            // 패딩 20px 고려
-            const clickX = e.clientX - rect.left - 20;
+            // 패딩 20px + 헤더 40px 고려
+            const clickX = e.clientX - rect.left - 60;
             if (clickX >= 0) {
               setCurrentTime(clickX / 20); // 1초당 20px 기준
             }
@@ -838,7 +838,7 @@ function App() {
           {/* Playhead (빨간 선) */}
           <div style={{
             position: 'absolute',
-            left: `${20 + currentTime * 20}px`,
+            left: `${60 + currentTime * 20}px`,
             top: 0,
             bottom: 0,
             width: '2px',
@@ -850,94 +850,118 @@ function App() {
           </div>
 
           {/* Track 1: Video (동적 타임라인 블록 렌더링) */}
-          <div style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative', display: 'flex', overflow: 'hidden' }}>
-             {timelineClips.length === 0 ? (
-               <div style={{ padding: '20px', color: '#555', fontSize: '12px', fontStyle: 'italic' }}>좌측 목록에서 '타임라인 추가'를 눌러 영상을 배치하세요.</div>
-             ) : (
-               timelineClips.map((clip) => (
-                 <div 
-                   key={clip.id}
-                   onClick={() => setSelectedTimelineClipId(clip.id)}
-                   style={{ 
-                     width: `${Math.max(10, (clip.trimEnd - clip.trimStart) * 20)}px`, // 1초당 20px 너비
-                     height: '100%', 
-                     background: selectedTimelineClipId === clip.id ? '#3b82f6' : 'var(--accent)', 
-                     border: selectedTimelineClipId === clip.id ? '2px solid white' : 'none',
-                     borderRight: '1px solid #1e3a8a',
-                     display: 'flex', 
-                     alignItems: 'center', 
-                     padding: '0 10px', 
-                     fontSize: '12px',
-                     position: 'relative',
-                     boxSizing: 'border-box',
-                     cursor: 'pointer'
-                   }}
-                 >
-                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.assetName}</span>
-                   <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
-                        if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
-                      }}
-                      style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >X</button>
-                 </div>
-               ))
-             )}
+          <div style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
+             <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
+                V1
+             </div>
+             <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
+               {timelineClips.length === 0 ? (
+                 <div style={{ padding: '20px', color: '#555', fontSize: '12px', fontStyle: 'italic' }}>좌측 목록에서 '타임라인 추가'를 눌러 영상을 배치하세요.</div>
+               ) : (
+                 timelineClips.map((clip) => (
+                   <div 
+                     key={clip.id}
+                     onClick={() => setSelectedTimelineClipId(clip.id)}
+                     style={{ 
+                       width: `${Math.max(10, (clip.trimEnd - clip.trimStart) * 20)}px`, // 1초당 20px 너비
+                       height: '100%', 
+                       background: selectedTimelineClipId === clip.id ? '#3b82f6' : 'var(--accent)', 
+                       border: selectedTimelineClipId === clip.id ? '2px solid white' : 'none',
+                       borderRight: '1px solid #1e3a8a',
+                       display: 'flex', 
+                       alignItems: 'center', 
+                       padding: '0 10px', 
+                       fontSize: '12px',
+                       position: 'relative',
+                       boxSizing: 'border-box',
+                       cursor: 'pointer'
+                     }}
+                   >
+                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.assetName}</span>
+                     <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
+                          if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
+                        }}
+                        style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >X</button>
+                   </div>
+                 ))
+               )}
+             </div>
           </div>
           {/* Dynamic Text Tracks */}
           {Array.from({ length: Math.max(1, textClips.length > 0 ? Math.max(...textClips.map(t => t.trackIndex || 0)) + 1 : 1) }).map((_, trackIdx) => {
             const clipsInThisTrack = textClips.filter(t => (t.trackIndex || 0) === trackIdx);
             return (
-              <div key={`text-track-${trackIdx}`} style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative', overflow: 'hidden' }}>
-                 {clipsInThisTrack.length === 0 ? (
-                   <div style={{ padding: '12px 20px', color: '#555', fontSize: '12px', fontStyle: 'italic' }}>
-                     {trackIdx === 0 ? "우측의 '현재 시간에 텍스트 추가' 버튼을 눌러 자막을 생성하세요." : `자막 트랙 ${trackIdx + 1} (비어있음)`}
-                   </div>
-                 ) : (
-                   clipsInThisTrack.map((clip) => (
-                     <div 
-                       key={clip.id}
-                       onClick={(e) => { e.stopPropagation(); setSelectedTextClipId(clip.id); setSelectedTimelineClipId(null); }}
-                       onMouseDown={(e) => {
-                         e.stopPropagation();
-                         setDraggingTextId(clip.id);
-                         setDragTextStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialEnd: clip.endTime, initialTrack: clip.trackIndex || 0 });
-                         setSelectedTextClipId(clip.id);
-                         setSelectedTimelineClipId(null);
-                       }}
-                       style={{ 
-                         position: 'absolute', 
-                         left: `${clip.startTime * 20}px`, 
-                         width: `${Math.max(10, (clip.endTime - clip.startTime) * 20)}px`, 
-                         height: '100%', 
-                         background: selectedTextClipId === clip.id ? '#34d399' : '#10b981', 
-                         border: selectedTextClipId === clip.id ? '2px solid white' : '1px solid #059669',
-                         borderRadius: '4px', 
-                         display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px',
-                         cursor: draggingTextId === clip.id ? 'grabbing' : 'grab', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
-                       }}
-                     >
-                        {clip.text}
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setTextClips(prev => prev.filter(c => c.id !== clip.id));
-                            if (selectedTextClipId === clip.id) setSelectedTextClipId(null);
-                          }}
-                          style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '14px', height: '14px', fontSize: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                        >X</button>
+              <div key={`text-track-${trackIdx}`} style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
+                 <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
+                   <button 
+                     onClick={(e) => {
+                       e.stopPropagation();
+                       if (window.confirm(`트랙 ${trackIdx + 1}의 모든 자막을 삭제하시겠습니까?`)) {
+                         setTextClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackIdx));
+                       }
+                     }}
+                     style={{ background: 'transparent', color: '#ef4444', border: 'none', cursor: 'pointer', fontSize: '14px', width: '100%', height: '100%' }}
+                     title={`트랙 ${trackIdx + 1} 전체 삭제`}
+                   >🗑️</button>
+                 </div>
+                 <div style={{ flex: 1, position: 'relative' }}>
+                   {clipsInThisTrack.length === 0 ? (
+                     <div style={{ padding: '12px 20px', color: '#555', fontSize: '12px', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+                       {trackIdx === 0 ? "우측의 '현재 시간에 텍스트 추가' 버튼을 눌러 자막을 생성하세요." : `자막 트랙 ${trackIdx + 1} (비어있음)`}
                      </div>
-                   ))
-                 )}
+                   ) : (
+                     clipsInThisTrack.map((clip) => (
+                       <div 
+                         key={clip.id}
+                         onClick={(e) => { e.stopPropagation(); setSelectedTextClipId(clip.id); setSelectedTimelineClipId(null); }}
+                         onMouseDown={(e) => {
+                           e.stopPropagation();
+                           setDraggingTextId(clip.id);
+                           setDragTextStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialEnd: clip.endTime, initialTrack: clip.trackIndex || 0 });
+                           setSelectedTextClipId(clip.id);
+                           setSelectedTimelineClipId(null);
+                         }}
+                         style={{ 
+                           position: 'absolute', 
+                           left: `${clip.startTime * 20}px`, 
+                           width: `${Math.max(10, (clip.endTime - clip.startTime) * 20)}px`, 
+                           height: '100%', 
+                           background: selectedTextClipId === clip.id ? '#34d399' : '#10b981', 
+                           border: selectedTextClipId === clip.id ? '2px solid white' : '1px solid #059669',
+                           borderRadius: '4px', 
+                           display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px',
+                           cursor: draggingTextId === clip.id ? 'grabbing' : 'grab', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
+                         }}
+                       >
+                          {clip.text}
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTextClips(prev => prev.filter(c => c.id !== clip.id));
+                              if (selectedTextClipId === clip.id) setSelectedTextClipId(null);
+                            }}
+                            style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '14px', height: '14px', fontSize: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          >X</button>
+                       </div>
+                     ))
+                   )}
+                 </div>
               </div>
             );
           })}
           {/* Track 3: Audio */}
-          <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative' }}>
-             <div style={{ position: 'absolute', left: '0px', width: '500px', height: '100%', background: '#8b5cf6', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px' }}>
-                배경음악 (BGM)
+          <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
+             <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
+                A1
+             </div>
+             <div style={{ flex: 1, position: 'relative' }}>
+                <div style={{ position: 'absolute', left: '0px', width: '500px', height: '100%', background: '#8b5cf6', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px' }}>
+                   배경음악 (BGM)
+                </div>
              </div>
           </div>
         </div>
