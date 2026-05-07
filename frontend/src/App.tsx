@@ -34,6 +34,58 @@ interface TextClip {
   color: string;
 }
 
+const parseSubtitles = (content: string): TextClip[] => {
+  const isVTT = content.trim().startsWith('WEBVTT');
+  const blocks = content.split(/\n\s*\n/);
+  const clips: TextClip[] = [];
+  
+  blocks.forEach(block => {
+    if (isVTT && block.startsWith('WEBVTT')) return;
+    const lines = block.split('\n').filter(l => l.trim() !== '');
+    if (lines.length >= 2) {
+      let timeLineIdx = 0;
+      if (!lines[0].includes('-->')) timeLineIdx = 1;
+      
+      if (timeLineIdx < lines.length && lines[timeLineIdx].includes('-->')) {
+        const timeLine = lines[timeLineIdx];
+        const textLines = lines.slice(timeLineIdx + 1).join('\n').replace(/<[^>]+>/g, '');
+        
+        let start = 0, end = 0;
+        
+        if (isVTT) {
+          const timeMatch = timeLine.match(/(\d{2}:)?(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}:)?(\d{2}):(\d{2})\.(\d{3})/);
+          if (timeMatch) {
+            const h1 = timeMatch[1] ? parseInt(timeMatch[1].replace(':', '')) : 0;
+            start = h1*3600 + parseInt(timeMatch[2])*60 + parseInt(timeMatch[3]) + parseInt(timeMatch[4])/1000;
+            const h2 = timeMatch[5] ? parseInt(timeMatch[5].replace(':', '')) : 0;
+            end = h2*3600 + parseInt(timeMatch[6])*60 + parseInt(timeMatch[7]) + parseInt(timeMatch[8])/1000;
+          }
+        } else {
+          const timeMatch = timeLine.match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+          if (timeMatch) {
+            start = parseInt(timeMatch[1])*3600 + parseInt(timeMatch[2])*60 + parseInt(timeMatch[3]) + parseInt(timeMatch[4])/1000;
+            end = parseInt(timeMatch[5])*3600 + parseInt(timeMatch[6])*60 + parseInt(timeMatch[7]) + parseInt(timeMatch[8])/1000;
+          }
+        }
+        
+        if (start !== 0 || end !== 0) {
+          clips.push({
+            id: Math.random().toString(36).substr(2, 9),
+            text: textLines.trim(),
+            startTime: start,
+            endTime: end,
+            x: 100,
+            y: 500, // 하단 중앙 부근
+            fontSize: 24,
+            color: '#ffffff',
+          });
+        }
+      }
+    }
+  });
+  return clips;
+};
+
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false); // 클립 전환 시 로딩 지연 방지용
@@ -54,6 +106,22 @@ function App() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<any>(null);
+  const subtitleFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSubtitleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      if (content) {
+        const newClips = parseSubtitles(content);
+        setTextClips(prev => [...prev, ...newClips]);
+      }
+      if (subtitleFileInputRef.current) subtitleFileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
 
   // 현재 시간에 재생되어야 할 클립 계산
   let accumTime = 0;
@@ -629,7 +697,7 @@ function App() {
             <div style={{ color: '#666', fontSize: '12px' }}>타임라인에서 클립이나 자막을 클릭하여 속성을 편집하세요.</div>
           )}
 
-          <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
+          <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <button 
               className="btn-primary" 
               onClick={() => {
@@ -649,6 +717,20 @@ function App() {
               style={{ width: '100%', padding: '10px', fontSize: '13px', background: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
             >
               + 현재 시간에 텍스트 추가
+            </button>
+            <input 
+              type="file" 
+              accept=".srt,.vtt" 
+              ref={subtitleFileInputRef} 
+              style={{ display: 'none' }} 
+              onChange={handleSubtitleUpload} 
+            />
+            <button 
+              className="btn-secondary" 
+              onClick={() => subtitleFileInputRef.current?.click()}
+              style={{ width: '100%', padding: '10px', fontSize: '13px', background: 'var(--bg-dark)', color: '#34d399', border: '1px solid #10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', cursor: 'pointer', borderRadius: '4px' }}
+            >
+              📂 외부 자막 (SRT/VTT) 불러오기
             </button>
           </div>
         </div>
