@@ -18,6 +18,8 @@ interface TimelineClip {
   trimStart: number; // 원본 영상에서 잘라낼 시작 시간(초)
   trimEnd: number;   // 원본 영상에서 잘라낼 종료 시간(초)
   duration?: number; // 원본 영상 전체 길이
+  startTime: number; // 타임라인 시작 위치(초)
+  trackIndex: number; // 트랙 번호 (V1=0, V2=1...)
   cropX: number;     // 0.0 ~ 1.0 (X축 크롭 위치, 기본값 0.5)
   cropY: number;     // 0.0 ~ 1.0 (Y축 크롭 위치, 기본값 0.5)
   scale: number;     // 1.0 ~ 3.0 (화면 확대 비율, 기본값 1.0)
@@ -98,6 +100,7 @@ function App() {
   const [selectedTimelineClipId, setSelectedTimelineClipId] = useState<string | null>(null); // 속성 편집용 타임라인 선택
   const [outputPath, setOutputPath] = useState("output_shorts.mp4");
   const [renderStatus, setRenderStatus] = useState("");
+  const [insertMode, setInsertMode] = useState<'playhead' | 'end_all' | 'end_selected' | 'new_track'>('playhead');
   
   const [textClips, setTextClips] = useState<TextClip[]>([]);
   const [selectedTextClipId, setSelectedTextClipId] = useState<string | null>(null);
@@ -122,19 +125,45 @@ function App() {
       const deltaY = e.clientY - dragTextStart.y;
       const trackOffset = Math.round(deltaY / 50); // 트랙 하나당 높이 대략 50px (40px + margin 10px)
       
-      setTextClips(prev => prev.map(c => {
-        if (c.id === draggingTextId) {
-          let newStart = dragTextStart.initialStart + deltaSec;
-          if (newStart < 0) newStart = 0;
-          const dur = dragTextStart.initialEnd - dragTextStart.initialStart;
-          
-          let newTrack = dragTextStart.initialTrack + trackOffset;
-          if (newTrack < 0) newTrack = 0;
-          
-          return { ...c, startTime: newStart, endTime: newStart + dur, trackIndex: newTrack };
-        }
-        return c;
-      }));
+      setTextClips(prev => {
+        // 텍스트 자석 효과(Snapping) 포인트 수집
+        const snapPoints = [0, currentTime];
+        prev.forEach(p => {
+          if (p.id !== draggingTextId) {
+            snapPoints.push(p.startTime);
+            snapPoints.push(p.endTime);
+          }
+        });
+
+        return prev.map(c => {
+          if (c.id === draggingTextId) {
+            let newStart = dragTextStart.initialStart + deltaSec;
+            const dur = dragTextStart.initialEnd - dragTextStart.initialStart;
+            let newEnd = newStart + dur;
+
+            // 0.5초(약 10px) 이내면 자석처럼 달라붙음
+            const SNAP_THRESHOLD = 0.5;
+            for (const sp of snapPoints) {
+               if (Math.abs(newStart - sp) < SNAP_THRESHOLD) {
+                 newStart = sp;
+                 break;
+               }
+               if (Math.abs(newEnd - sp) < SNAP_THRESHOLD) {
+                 newStart = sp - dur;
+                 break;
+               }
+            }
+
+            if (newStart < 0) newStart = 0;
+            
+            let newTrack = dragTextStart.initialTrack + trackOffset;
+            if (newTrack < 0) newTrack = 0;
+            
+            return { ...c, startTime: newStart, endTime: newStart + dur, trackIndex: newTrack };
+          }
+          return c;
+        });
+      });
     };
     
     const handleMouseUp = () => {
@@ -149,6 +178,75 @@ function App() {
       window.removeEventListener('mouseup', handleMouseUp);
     };
   }, [draggingTextId, dragTextStart]);
+
+  const [draggingVideoId, setDraggingVideoId] = useState<string | null>(null);
+  const [dragVideoStart, setDragVideoStart] = useState<{ x: number, y: number, initialStart: number, initialTrack: number } | null>(null);
+
+  useEffect(() => {
+    if (!draggingVideoId || !dragVideoStart) return;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragVideoStart.x;
+      const deltaSec = deltaX / 20; // 1초당 20px
+      
+      const deltaY = e.clientY - dragVideoStart.y;
+      const trackOffset = Math.round(deltaY / 70); // 비디오 트랙 높이 (60px + margin 10px = 70px)
+      
+      setTimelineClips(prev => {
+        // 자석 효과(Snapping)를 위한 모든 자석 포인트 수집
+        const snapPoints = [0, currentTime];
+        prev.forEach(p => {
+          if (p.id !== draggingVideoId) {
+            snapPoints.push(p.startTime);
+            snapPoints.push(p.startTime + (p.trimEnd - p.trimStart));
+          }
+        });
+
+        return prev.map(c => {
+          if (c.id === draggingVideoId) {
+            let newStart = dragVideoStart.initialStart + deltaSec;
+            const dur = c.trimEnd - c.trimStart;
+            let newEnd = newStart + dur;
+            
+            // 0.5초(약 10px) 이내면 자석처럼 달라붙음
+            const SNAP_THRESHOLD = 0.5;
+            for (const sp of snapPoints) {
+               // 시작점 스냅
+               if (Math.abs(newStart - sp) < SNAP_THRESHOLD) {
+                 newStart = sp;
+                 break;
+               }
+               // 끝점 스냅
+               if (Math.abs(newEnd - sp) < SNAP_THRESHOLD) {
+                 newStart = sp - dur;
+                 break;
+               }
+            }
+
+            if (newStart < 0) newStart = 0;
+            
+            let newTrack = dragVideoStart.initialTrack + trackOffset;
+            if (newTrack < 0) newTrack = 0;
+            
+            return { ...c, startTime: newStart, trackIndex: newTrack };
+          }
+          return c;
+        });
+      });
+    };
+    
+    const handleMouseUp = () => {
+      setDraggingVideoId(null);
+      setDragVideoStart(null);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingVideoId, dragVideoStart]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<any>(null);
@@ -169,19 +267,19 @@ function App() {
     reader.readAsText(file);
   };
 
-  // 현재 시간에 재생되어야 할 클립 계산
-  let accumTime = 0;
+  // 현재 시간에 재생되어야 할 클립 계산 (다중 비디오 트랙)
   let activeClip: TimelineClip | null = null;
   let activeClipLocalTime = 0;
 
-  for (const clip of timelineClips) {
-    const duration = clip.trimEnd - clip.trimStart;
-    if (currentTime >= accumTime && currentTime < accumTime + duration) {
-      activeClip = clip;
-      activeClipLocalTime = clip.trimStart + (currentTime - accumTime);
-      break;
-    }
-    accumTime += duration;
+  const overlappingVideoClips = timelineClips.filter(c => 
+    currentTime >= c.startTime && currentTime < c.startTime + (c.trimEnd - c.trimStart)
+  );
+
+  if (overlappingVideoClips.length > 0) {
+    // 트랙 번호가 높은(V2, V3...) 클립을 최우선으로 선택
+    overlappingVideoClips.sort((a, b) => (b.trackIndex || 0) - (a.trackIndex || 0));
+    activeClip = overlappingVideoClips[0];
+    activeClipLocalTime = activeClip.trimStart + (currentTime - activeClip.startTime);
   }
 
   // 플레이헤드 재생 로직 (버퍼링 중일 때는 시간 정지)
@@ -192,20 +290,17 @@ function App() {
         setCurrentTime(prev => {
           const nextTime = prev + 0.1;
           
-          let totalDuration = 0;
-          let currentClipEnd = 0;
-          for (const clip of timelineClips) {
-            const dur = clip.trimEnd - clip.trimStart;
-            if (prev >= totalDuration && prev < totalDuration + dur) {
-              currentClipEnd = totalDuration + dur;
-            }
-            totalDuration += dur;
-          }
+          const totalDuration = timelineClips.length > 0 
+            ? Math.max(...timelineClips.map(c => c.startTime + (c.trimEnd - c.trimStart))) 
+            : 0;
 
           // 단일 클립 모드: 클립의 끝에 도달하면 일시정지
-          if (!isContinuousPlay && currentClipEnd > 0 && nextTime >= currentClipEnd) {
-             setIsPlaying(false);
-             return currentClipEnd - 0.01;
+          if (!isContinuousPlay && activeClip) {
+             const currentClipEnd = activeClip.startTime + (activeClip.trimEnd - activeClip.trimStart);
+             if (nextTime >= currentClipEnd) {
+               setIsPlaying(false);
+               return currentClipEnd - 0.01;
+             }
           }
 
           // 전체 타임라인 끝에 도달하면 정지
@@ -218,7 +313,7 @@ function App() {
       }, 100);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, isBuffering, timelineClips, isContinuousPlay]);
+  }, [isPlaying, isBuffering, timelineClips, isContinuousPlay, activeClip]);
 
   // 비디오 탐색(Seek) 및 클립 연속 재생 동기화
   useEffect(() => {
@@ -356,7 +451,20 @@ function App() {
 
           {/* 에셋 목록 (리스트형 UI) */}
           <div style={{ background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', minHeight: '200px', maxHeight: '400px', overflowY: 'auto' }}>
-            <label style={{ display: 'block', marginBottom: '10px', color: 'var(--text-muted)', fontSize: '12px' }}>업로드된 에셋 목록</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <label style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>업로드된 에셋 목록</label>
+              <select 
+                value={insertMode} 
+                onChange={(e) => setInsertMode(e.target.value as any)}
+                style={{ background: '#333', color: 'white', border: '1px solid #555', borderRadius: '4px', fontSize: '11px', padding: '2px 4px', cursor: 'pointer' }}
+                title="타임라인에 추가될 위치"
+              >
+                <option value="playhead">▶️ 재생 위치 (빈칸 자동)</option>
+                <option value="end_selected">🎯 선택된 클립 뒤에</option>
+                <option value="end_all">⏭️ 타임라인 맨 끝에</option>
+                <option value="new_track">🆕 새로운 트랙(V층) 생성</option>
+              </select>
+            </div>
             {assets.length === 0 ? (
               <div style={{ color: '#666', fontSize: '12px', textAlign: 'center', marginTop: '40px' }}>버튼을 눌러 영상을<br/>불러와주세요.</div>
             ) : (
@@ -386,14 +494,65 @@ function App() {
                       <button 
                         onClick={(e) => {
                           e.stopPropagation(); // 클릭 이벤트 버블링 방지
+                          
+                          const newTrimEnd = asset.duration ? Math.min(5, asset.duration) : 5;
+                          const newDuration = newTrimEnd; // trimStart is 0
+                          
+                          let targetStartTime = currentTime;
+                          let targetTrack = 0;
+
+                          if (insertMode === 'playhead') {
+                            targetStartTime = currentTime;
+                            // 빈 비디오 트랙 찾기
+                            while (true) {
+                              // @ts-ignore
+                              const isOccupied = timelineClips.some(c => (c.trackIndex || 0) === targetTrack && Math.max(targetStartTime, c.startTime) < Math.min(targetStartTime + newDuration, c.startTime + (c.trimEnd - c.trimStart)));
+                              if (!isOccupied) break;
+                              targetTrack++;
+                            }
+                          } else if (insertMode === 'end_selected') {
+                            if (!selectedTimelineClipId) {
+                               alert("타임라인에서 기준이 될 영상 블록(파란색 테두리)을 먼저 클릭해주세요.");
+                               return;
+                            }
+                            const selClip = timelineClips.find(c => c.id === selectedTimelineClipId);
+                            if (selClip) {
+                               targetTrack = selClip.trackIndex || 0;
+                               const clipsOnTrack = timelineClips.filter(c => (c.trackIndex || 0) === targetTrack);
+                               targetStartTime = clipsOnTrack.length > 0 ? Math.max(...clipsOnTrack.map(c => c.startTime + (c.trimEnd - c.trimStart))) : 0;
+                            } else {
+                               alert("선택된 영상 블록을 찾을 수 없습니다.");
+                               return;
+                            }
+                          } else if (insertMode === 'end_all') {
+                            if (timelineClips.length > 0) {
+                              // 전체 클립 중 가장 늦게 끝나는 클립을 찾아 해당 클립의 트랙에 이어붙임
+                              const lastClip = timelineClips.reduce((latest, current) => {
+                                 const latestEnd = latest.startTime + (latest.trimEnd - latest.trimStart);
+                                 const currentEnd = current.startTime + (current.trimEnd - current.trimStart);
+                                 return currentEnd > latestEnd ? current : latest;
+                              });
+                              targetStartTime = lastClip.startTime + (lastClip.trimEnd - lastClip.trimStart);
+                              targetTrack = lastClip.trackIndex || 0;
+                            } else {
+                              targetStartTime = 0;
+                              targetTrack = 0;
+                            }
+                          } else if (insertMode === 'new_track') {
+                            targetStartTime = currentTime;
+                            targetTrack = timelineClips.length > 0 ? Math.max(...timelineClips.map(c => c.trackIndex || 0)) + 1 : 0;
+                          }
+
                           const newClip: TimelineClip = {
                             id: Math.random().toString(36).substr(2, 9),
                             assetId: asset.id,
                             assetName: asset.name,
                             path: asset.path,
                             trimStart: 0, // 기본값 0초부터
-                            trimEnd: asset.duration ? Math.min(5, asset.duration) : 5,    // 최대 5초
+                            trimEnd: newTrimEnd,    // 최대 5초
                             duration: asset.duration,
+                            startTime: targetStartTime,
+                            trackIndex: targetTrack,
                             cropX: 0.5,
                             cropY: 0.5,
                             scale: 1.0
@@ -853,48 +1012,64 @@ function App() {
              <div style={{ width: '10px', height: '10px', background: 'red', borderRadius: '50%', transform: 'translateX(-4px)' }} />
           </div>
 
-          {/* Track 1: Video (동적 타임라인 블록 렌더링) */}
-          <div style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
-             <div style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}>
-                <span style={{ fontWeight: 'bold' }}>V1</span>
-             </div>
-             <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-               {timelineClips.length === 0 ? (
-                 <div style={{ padding: '20px', color: '#555', fontSize: '12px', fontStyle: 'italic' }}>좌측 목록에서 '타임라인 추가'를 눌러 영상을 배치하세요.</div>
-               ) : (
-                 timelineClips.map((clip) => (
-                   <div 
-                     key={clip.id}
-                     onClick={() => setSelectedTimelineClipId(clip.id)}
-                     style={{ 
-                       width: `${Math.max(10, (clip.trimEnd - clip.trimStart) * 20)}px`, // 1초당 20px 너비
-                       height: '100%', 
-                       background: selectedTimelineClipId === clip.id ? '#3b82f6' : 'var(--accent)', 
-                       border: selectedTimelineClipId === clip.id ? '2px solid white' : 'none',
-                       borderRight: '1px solid #1e3a8a',
-                       display: 'flex', 
-                       alignItems: 'center', 
-                       padding: '0 10px', 
-                       fontSize: '12px',
-                       position: 'relative',
-                       boxSizing: 'border-box',
-                       cursor: 'pointer'
-                     }}
-                   >
-                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.assetName}</span>
-                     <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
-                          if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
-                        }}
-                        style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                      >X</button>
-                   </div>
-                 ))
-               )}
-             </div>
-          </div>
+          {/* Dynamic Video Tracks */}
+          {Array.from({ length: Math.max(1, timelineClips.length > 0 ? Math.max(...timelineClips.map(c => c.trackIndex || 0)) + 1 : 1) }).map((_, trackIdx) => {
+            const clipsInThisTrack = timelineClips.filter(c => (c.trackIndex || 0) === trackIdx);
+            return (
+              <div key={`video-track-${trackIdx}`} style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
+                 <div style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}>
+                    <span style={{ fontWeight: 'bold' }}>V{trackIdx + 1}</span>
+                 </div>
+                 <div style={{ flex: 1, position: 'relative' }}>
+                   {clipsInThisTrack.length === 0 ? (
+                     <div style={{ padding: '20px', color: '#555', fontSize: '12px', fontStyle: 'italic', whiteSpace: 'nowrap' }}>
+                       {trackIdx === 0 ? "좌측 목록에서 '타임라인 추가'를 눌러 영상을 배치하세요." : `비디오 트랙 ${trackIdx + 1} (비어있음)`}
+                     </div>
+                   ) : (
+                     clipsInThisTrack.map((clip) => (
+                       <div 
+                         key={clip.id}
+                         onClick={(e) => { e.stopPropagation(); setSelectedTimelineClipId(clip.id); setSelectedTextClipId(null); }}
+                         onMouseDown={(e) => {
+                           e.stopPropagation();
+                           setDraggingVideoId(clip.id);
+                           setDragVideoStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialTrack: clip.trackIndex || 0 });
+                           setSelectedTimelineClipId(clip.id);
+                           setSelectedTextClipId(null);
+                         }}
+                         style={{ 
+                           position: 'absolute',
+                           left: `${clip.startTime * 20}px`,
+                           width: `${Math.max(10, (clip.trimEnd - clip.trimStart) * 20)}px`, // 1초당 20px 너비
+                           height: '100%', 
+                           background: selectedTimelineClipId === clip.id ? '#3b82f6' : 'var(--accent)', 
+                           border: selectedTimelineClipId === clip.id ? '2px solid white' : 'none',
+                           borderRight: '1px solid #1e3a8a',
+                           borderRadius: '4px',
+                           display: 'flex', 
+                           alignItems: 'center', 
+                           padding: '0 10px', 
+                           fontSize: '12px',
+                           boxSizing: 'border-box',
+                           cursor: draggingVideoId === clip.id ? 'grabbing' : 'grab'
+                         }}
+                       >
+                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.assetName}</span>
+                         <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
+                              if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
+                            }}
+                            style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                          >X</button>
+                       </div>
+                     ))
+                   )}
+                 </div>
+              </div>
+            );
+          })}
           {/* Dynamic Text Tracks */}
           {Array.from({ length: Math.max(1, textClips.length > 0 ? Math.max(...textClips.map(t => t.trackIndex || 0)) + 1 : 1) }).map((_, trackIdx) => {
             const clipsInThisTrack = textClips.filter(t => (t.trackIndex || 0) === trackIdx);
