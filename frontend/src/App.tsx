@@ -105,6 +105,47 @@ function App() {
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5 });
 
+  const [draggingTextId, setDraggingTextId] = useState<string | null>(null);
+  const [dragTextStart, setDragTextStart] = useState<{ x: number, y: number, initialStart: number, initialEnd: number, initialTrack: number } | null>(null);
+
+  useEffect(() => {
+    if (!draggingTextId || !dragTextStart) return;
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragTextStart.x;
+      const deltaSec = deltaX / 20; // 1초당 20px
+      
+      const deltaY = e.clientY - dragTextStart.y;
+      const trackOffset = Math.round(deltaY / 50); // 트랙 하나당 높이 대략 50px (40px + margin 10px)
+      
+      setTextClips(prev => prev.map(c => {
+        if (c.id === draggingTextId) {
+          let newStart = dragTextStart.initialStart + deltaSec;
+          if (newStart < 0) newStart = 0;
+          const dur = dragTextStart.initialEnd - dragTextStart.initialStart;
+          
+          let newTrack = dragTextStart.initialTrack + trackOffset;
+          if (newTrack < 0) newTrack = 0;
+          
+          return { ...c, startTime: newStart, endTime: newStart + dur, trackIndex: newTrack };
+        }
+        return c;
+      }));
+    };
+    
+    const handleMouseUp = () => {
+      setDraggingTextId(null);
+      setDragTextStart(null);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [draggingTextId, dragTextStart]);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<any>(null);
   const subtitleFileInputRef = useRef<HTMLInputElement>(null);
@@ -859,6 +900,13 @@ function App() {
                      <div 
                        key={clip.id}
                        onClick={(e) => { e.stopPropagation(); setSelectedTextClipId(clip.id); setSelectedTimelineClipId(null); }}
+                       onMouseDown={(e) => {
+                         e.stopPropagation();
+                         setDraggingTextId(clip.id);
+                         setDragTextStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialEnd: clip.endTime, initialTrack: clip.trackIndex || 0 });
+                         setSelectedTextClipId(clip.id);
+                         setSelectedTimelineClipId(null);
+                       }}
                        style={{ 
                          position: 'absolute', 
                          left: `${clip.startTime * 20}px`, 
@@ -868,7 +916,7 @@ function App() {
                          border: selectedTextClipId === clip.id ? '2px solid white' : '1px solid #059669',
                          borderRadius: '4px', 
                          display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px',
-                         cursor: 'pointer', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
+                         cursor: draggingTextId === clip.id ? 'grabbing' : 'grab', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
                        }}
                      >
                         {clip.text}
