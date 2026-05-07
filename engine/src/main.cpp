@@ -106,7 +106,11 @@ public:
             }
 
             char filter_desc[1024];
-            snprintf(filter_desc, sizeof(filter_desc), "movie=filename='%s' [wm]; [in] [wm] overlay=0:0 [out]", escapedOverlay.c_str());
+            if (sanitizedOverlay.length() >= 4 && sanitizedOverlay.substr(sanitizedOverlay.length() - 4) == ".ass") {
+                snprintf(filter_desc, sizeof(filter_desc), "subtitles=filename='%s'", escapedOverlay.c_str());
+            } else {
+                snprintf(filter_desc, sizeof(filter_desc), "movie=filename='%s' [wm]; [in] [wm] overlay=0:0 [out]", escapedOverlay.c_str());
+            }
 
             const AVFilter *buffersrc  = avfilter_get_by_name("buffer");
             const AVFilter *buffersink = avfilter_get_by_name("buffersink");

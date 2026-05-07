@@ -140,15 +140,10 @@ function App() {
     try {
       setRenderStatus("C++ 엔진 호출 중... (모든 타임라인 영상 인코딩 중)");
       
-      let overlayBase64 = null;
-      if (stageRef.current) {
-        overlayBase64 = stageRef.current.toDataURL({ pixelRatio: 2.0 }); // 720x1280 해상도로 추출
-      }
-
       // @ts-ignore
       if (window.electronAPI) {
         // @ts-ignore
-        const result = await window.electronAPI.renderVideo(timelineClips, outputPath, overlayBase64);
+        const result = await window.electronAPI.renderVideo(timelineClips, outputPath, textClips);
         setRenderStatus(result); // 알림창 대신 UI에 상태 표시
       } else {
         setRenderStatus("Electron 환경이 아닙니다.");

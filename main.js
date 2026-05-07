@@ -39,7 +39,49 @@ ipcMain.handle('render-video', async (event, clips, outputPath, overlayBase64) =
     console.log(`[Electron Main] 비디오 분석 요청 수신! (클립 수: ${clips.length})`);
     
     let overlayImagePath = "";
-    if (overlayBase64) {
+    if (Array.isArray(overlayBase64) && overlayBase64.length > 0) {
+      const textClips = overlayBase64;
+      overlayImagePath = path.join(__dirname, 'temp.ass');
+      
+      let assContent = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 720
+PlayResY: 1280
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Inter,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
+
+      function formatAssTime(seconds) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        const cs = Math.floor((seconds % 1) * 100);
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs.toString().padStart(2, '0')}`;
+      }
+
+      textClips.forEach(clip => {
+        const start = formatAssTime(clip.startTime);
+        const end = formatAssTime(clip.endTime);
+        const x = Math.round(clip.x * 2);
+        const y = Math.round(clip.y * 2);
+        const fontSize = Math.round(clip.fontSize * 2);
+        
+        let bgr = "FFFFFF";
+        if (clip.color && clip.color.length === 7) {
+          bgr = clip.color.substring(5,7) + clip.color.substring(3,5) + clip.color.substring(1,3);
+        }
+        
+        const cleanText = clip.text.replace(/\n/g, '\\N');
+        assContent += `Dialogue: 0,${start},${end},Default,,0,0,0,,{\\pos(${x},${y})\\c&H${bgr}&\\fs${fontSize}}${cleanText}\n`;
+      });
+
+      fs.writeFileSync(overlayImagePath, assContent, 'utf8');
+      console.log('[Electron Main] ASS 자막 파일 생성 완료:', overlayImagePath);
+    } else if (typeof overlayBase64 === 'string' && overlayBase64.startsWith('data:image')) {
       overlayImagePath = path.join(__dirname, 'temp_overlay.png');
       const base64Data = overlayBase64.replace(/^data:image\/png;base64,/, "");
       fs.writeFileSync(overlayImagePath, base64Data, 'base64');
