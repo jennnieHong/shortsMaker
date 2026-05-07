@@ -56,7 +56,7 @@ ipcMain.handle('render-video', async (event, clips, outputPath, overlayBase64) =
   }
 });
 
-// 파일 선택 다이얼로그 호출용 리스너
+// 파일 선택 다이얼로그 호출용 리스너 (다중 선택 지원)
 ipcMain.handle('dialog:openFile', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title: '입력 비디오 선택',
@@ -65,12 +65,36 @@ ipcMain.handle('dialog:openFile', async () => {
       { name: 'Videos', extensions: ['mp4', 'avi', 'mov', 'mkv', 'webm'] },
       { name: 'All Files', extensions: ['*'] }
     ],
-    properties: ['openFile']
+    properties: ['openFile', 'multiSelections']
   });
   
   if (canceled) {
-    return null;
+    return [];
   } else {
-    return filePaths[0]; // 첫 번째 선택한 파일 경로 반환
+    return filePaths; // 배열 반환
+  }
+});
+
+// 폴더 선택 다이얼로그 호출용 리스너
+ipcMain.handle('dialog:openDirectory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: '비디오 폴더 선택',
+    defaultPath: 'C:\\Users\\uoshj\\Videos\\Captures',
+    properties: ['openDirectory']
+  });
+  
+  if (canceled || filePaths.length === 0) {
+    return [];
+  } else {
+    const dirPath = filePaths[0];
+    const files = fs.readdirSync(dirPath);
+    const videoExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm'];
+    
+    // 비디오 파일만 필터링하여 절대 경로 배열로 반환
+    const videoFiles = files
+      .filter(file => videoExts.includes(path.extname(file).toLowerCase()))
+      .map(file => path.join(dirPath, file));
+      
+    return videoFiles;
   }
 });

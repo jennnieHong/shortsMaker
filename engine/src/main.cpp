@@ -101,7 +101,7 @@ public:
             }
             std::string escapedOverlay = "";
             for(char c : sanitizedOverlay) {
-                if(c == ':') escapedOverlay += "\\\\:";
+                if(c == ':') escapedOverlay += "\\:";
                 else escapedOverlay += c;
             }
 

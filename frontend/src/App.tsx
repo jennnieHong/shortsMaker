@@ -23,6 +23,17 @@ interface TimelineClip {
   scale: number;     // 1.0 ~ 3.0 (화면 확대 비율, 기본값 1.0)
 }
 
+interface TextClip {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  startTime: number;
+  endTime: number;
+  fontSize: number;
+  color: string;
+}
+
 function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false); // 클립 전환 시 로딩 지연 방지용
@@ -34,7 +45,9 @@ function App() {
   const [selectedTimelineClipId, setSelectedTimelineClipId] = useState<string | null>(null); // 속성 편집용 타임라인 선택
   const [outputPath, setOutputPath] = useState("output_shorts.mp4");
   const [renderStatus, setRenderStatus] = useState("");
-  const [overlayText, setOverlayText] = useState("여기에 자막을 입력하세요! 🎉");
+  
+  const [textClips, setTextClips] = useState<TextClip[]>([]);
+  const [selectedTextClipId, setSelectedTextClipId] = useState<string | null>(null);
 
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5 });
@@ -165,42 +178,72 @@ function App() {
         <h2 className="panel-title">에셋 & 템플릿</h2>
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          <button 
-            onClick={async () => {
-              // @ts-ignore
-              if (window.electronAPI && window.electronAPI.openFileDialog) {
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button 
+              onClick={async () => {
                 // @ts-ignore
-                const filePath = await window.electronAPI.openFileDialog();
-                if (filePath) {
-                  // 파일명만 추출 (윈도우 경로는 \ 기준)
-                  const fileName = filePath.split('\\').pop() || 'Unknown Video';
-                  
-                  // 비디오 전체 길이(Duration) 파싱
-                  const tempVideo = document.createElement('video');
-                  tempVideo.src = `file://${filePath}`;
-                  tempVideo.onloadedmetadata = () => {
-                    const newAsset: Asset = {
-                      id: Math.random().toString(36).substr(2, 9),
-                      name: fileName,
-                      path: filePath,
-                      duration: tempVideo.duration
-                    };
-                    setAssets(prev => [...prev, newAsset]);
-                    if (!selectedAssetId) setSelectedAssetId(newAsset.id);
-                  };
-                  tempVideo.onerror = () => {
-                     // 메타데이터 로드 실패시 기본값
-                     const newAsset: Asset = { id: Math.random().toString(36).substr(2, 9), name: fileName, path: filePath, duration: 30 };
-                     setAssets(prev => [...prev, newAsset]);
-                  };
+                if (window.electronAPI && window.electronAPI.openFileDialog) {
+                  // @ts-ignore
+                  const filePaths = await window.electronAPI.openFileDialog();
+                  if (filePaths && filePaths.length > 0) {
+                    filePaths.forEach((filePath: string) => {
+                      const fileName = filePath.split('\\').pop() || 'Unknown Video';
+                      const tempVideo = document.createElement('video');
+                      tempVideo.src = `file://${filePath}`;
+                      tempVideo.onloadedmetadata = () => {
+                        const newAsset: Asset = { id: Math.random().toString(36).substr(2, 9), name: fileName, path: filePath, duration: tempVideo.duration };
+                        setAssets(prev => {
+                          const updated = [...prev, newAsset];
+                          if (updated.length === 1) setSelectedAssetId(newAsset.id);
+                          return updated;
+                        });
+                      };
+                      tempVideo.onerror = () => {
+                         const newAsset: Asset = { id: Math.random().toString(36).substr(2, 9), name: fileName, path: filePath, duration: 30 };
+                         setAssets(prev => [...prev, newAsset]);
+                      };
+                    });
+                  }
                 }
-              }
-            }}
-            className="btn-primary"
-            style={{ width: '100%', padding: '12px', fontSize: '14px', background: 'var(--accent)', fontWeight: 600 }}
-          >
-            + 새 동영상 불러오기
-          </button>
+              }}
+              className="btn-primary"
+              style={{ flex: 1, padding: '10px', fontSize: '12px', background: 'var(--accent)', fontWeight: 600 }}
+            >
+              + 파일 여러 개
+            </button>
+            <button 
+              onClick={async () => {
+                // @ts-ignore
+                if (window.electronAPI && window.electronAPI.openDirectoryDialog) {
+                  // @ts-ignore
+                  const filePaths = await window.electronAPI.openDirectoryDialog();
+                  if (filePaths && filePaths.length > 0) {
+                    filePaths.forEach((filePath: string) => {
+                      const fileName = filePath.split('\\').pop() || 'Unknown Video';
+                      const tempVideo = document.createElement('video');
+                      tempVideo.src = `file://${filePath}`;
+                      tempVideo.onloadedmetadata = () => {
+                        const newAsset: Asset = { id: Math.random().toString(36).substr(2, 9), name: fileName, path: filePath, duration: tempVideo.duration };
+                        setAssets(prev => {
+                          const updated = [...prev, newAsset];
+                          if (updated.length === 1) setSelectedAssetId(newAsset.id);
+                          return updated;
+                        });
+                      };
+                      tempVideo.onerror = () => {
+                         const newAsset: Asset = { id: Math.random().toString(36).substr(2, 9), name: fileName, path: filePath, duration: 30 };
+                         setAssets(prev => [...prev, newAsset]);
+                      };
+                    });
+                  }
+                }
+              }}
+              className="btn-primary"
+              style={{ flex: 1, padding: '10px', fontSize: '12px', background: '#3b82f6', fontWeight: 600 }}
+            >
+              📁 폴더 통째로
+            </button>
+          </div>
 
           {/* 에셋 목록 (리스트형 UI) */}
           <div style={{ background: 'var(--bg-dark)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', minHeight: '200px', maxHeight: '400px', overflowY: 'auto' }}>
@@ -212,7 +255,7 @@ function App() {
                 {assets.map(asset => (
                   <li 
                     key={asset.id}
-                    onClick={() => setSelectedAssetId(asset.id)}
+                    onClick={() => { setSelectedAssetId(asset.id); setSelectedTextClipId(null); }}
                     style={{ 
                       padding: '10px', 
                       background: selectedAssetId === asset.id ? 'rgba(59, 130, 246, 0.2)' : '#222', 
@@ -346,18 +389,48 @@ function App() {
           </div>
           
            {/* 2. Konva Canvas for WYSIWYG editing (비디오 앞단 투명 레이어) */}
-           <Stage ref={stageRef} width={360} height={640} style={{ position: 'absolute', zIndex: 10, pointerEvents: 'none' }}>
+           <Stage 
+            ref={stageRef} 
+            width={360} height={640} 
+            style={{ position: 'absolute', zIndex: 10 }}
+            onMouseDown={(e) => {
+              // 텍스트를 클릭한게 아니라면 선택 해제 (캔버스 드래그로 넘어감)
+              if (e.target === e.target.getStage()) {
+                setSelectedTextClipId(null);
+              }
+            }}
+          >
             <Layer>
-              <Text 
-                text={overlayText} 
-                x={80} 
-                y={100} 
-                fill="#fff" 
-                fontSize={20} 
-                fontFamily="Inter"
-                shadowColor="black"
-                shadowBlur={5}
-              />
+              {textClips.filter(t => currentTime >= t.startTime && currentTime <= t.endTime).map(tClip => (
+                <Text 
+                  key={tClip.id}
+                  text={tClip.text} 
+                  x={tClip.x} 
+                  y={tClip.y} 
+                  fill={tClip.color} 
+                  fontSize={tClip.fontSize} 
+                  fontFamily="Inter"
+                  shadowColor="black"
+                  shadowBlur={5}
+                  draggable
+                  onDragStart={(e) => {
+                    e.cancelBubble = true; // 비디오 드래그 방지
+                  }}
+                  onDragEnd={(e) => {
+                    setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, x: e.target.x(), y: e.target.y() } : c));
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true;
+                    setSelectedTextClipId(tClip.id); 
+                    setSelectedTimelineClipId(null); 
+                  }}
+                  onTap={(e) => {
+                    e.cancelBubble = true;
+                    setSelectedTextClipId(tClip.id); 
+                    setSelectedTimelineClipId(null); 
+                  }}
+                />
+              ))}
             </Layer>
           </Stage>
         </div>
@@ -420,9 +493,10 @@ function App() {
       <aside className="sidebar-right">
         <h2 className="panel-title">속성 설정 (Properties)</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-          {selectedTimelineClipId ? (() => {
+          {/* --- 비디오 속성 편집 --- */}
+          {selectedTimelineClipId && (() => {
             const clip = timelineClips.find(c => c.id === selectedTimelineClipId);
-            if (!clip) return <div style={{ color: '#666', fontSize: '12px' }}>클립을 찾을 수 없습니다.</div>;
+            if (!clip) return null;
             return (
               <>
                 <div style={{ background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px', fontSize: '12px', color: 'var(--accent)' }}>
@@ -431,35 +505,19 @@ function App() {
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>컷 시작 시간 (초)</label>
                   <input 
-                    type="number" 
-                    step="0.1"
-                    min="0"
-                    value={clip.trimStart} 
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, trimStart: val } : c));
-                    }}
+                    type="number" step="0.1" min="0" value={clip.trimStart} 
+                    onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, trimStart: parseFloat(e.target.value) || 0 } : c))}
                     style={{ width: '100%', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }} 
                   />
                 </div>
                 <div>
                   <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>컷 종료 시간 (초)</label>
                   <input 
-                    type="number" 
-                    step="0.1"
-                    min="0.1"
-                    value={clip.trimEnd} 
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value) || 0;
-                      setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, trimEnd: val } : c));
-                    }}
+                    type="number" step="0.1" min="0.1" value={clip.trimEnd} 
+                    onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, trimEnd: parseFloat(e.target.value) || 0 } : c))}
                     style={{ width: '100%', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }} 
                   />
                 </div>
-                <div style={{ fontSize: '11px', color: '#888', marginTop: '-5px' }}>
-                  현재 클립 길이: {(clip.trimEnd - clip.trimStart).toFixed(1)}초
-                </div>
-                
                 <div style={{ marginTop: '15px', background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px' }}>
                   <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>🔍 줌 인 (확대: {clip.scale ? clip.scale.toFixed(1) : 1.0}x)</label>
                   <input 
@@ -467,14 +525,12 @@ function App() {
                     onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, scale: parseFloat(e.target.value) } : c))}
                     style={{ width: '100%', cursor: 'ew-resize', marginBottom: '15px' }} 
                   />
-
                   <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>↔️ 좌/우 이동</label>
                   <input 
                     type="range" min="0" max="1" step="0.01" value={clip.cropX} 
                     onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, cropX: parseFloat(e.target.value) } : c))}
                     style={{ width: '100%', cursor: 'ew-resize', marginBottom: '15px' }} 
                   />
-
                   <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>↕️ 상/하 이동</label>
                   <input 
                     type="range" min="0" max="1" step="0.01" value={clip.cropY} 
@@ -484,18 +540,90 @@ function App() {
                 </div>
               </>
             );
-          })() : (
-            <div style={{ color: '#666', fontSize: '12px' }}>타임라인에서 클립을 클릭하여 속성을 편집하세요.</div>
+          })()}
+
+          {/* --- 텍스트 속성 편집 --- */}
+          {selectedTextClipId && (() => {
+            const tClip = textClips.find(t => t.id === selectedTextClipId);
+            if (!tClip) return null;
+            return (
+              <>
+                <div style={{ background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px', fontSize: '12px', color: '#10b981' }}>
+                  텍스트 설정
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>자막 내용</label>
+                  <textarea 
+                    value={tClip.text}
+                    onChange={(e) => setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, text: e.target.value } : c))}
+                    style={{ width: '100%', height: '60px', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px', resize: 'none' }}
+                  />
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>시작 (초)</label>
+                    <input 
+                      type="number" step="0.1" min="0" value={tClip.startTime} 
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, startTime: parseFloat(e.target.value) || 0 } : c))}
+                      style={{ width: '100%', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }} 
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>종료 (초)</label>
+                    <input 
+                      type="number" step="0.1" min="0" value={tClip.endTime} 
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, endTime: parseFloat(e.target.value) || 0 } : c))}
+                      style={{ width: '100%', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }} 
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>폰트 크기</label>
+                    <input 
+                      type="number" value={tClip.fontSize} 
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, fontSize: parseInt(e.target.value) || 20 } : c))}
+                      style={{ width: '100%', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px' }} 
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>색상</label>
+                    <input 
+                      type="color" value={tClip.color} 
+                      onChange={(e) => setTextClips(prev => prev.map(c => c.id === tClip.id ? { ...c, color: e.target.value } : c))}
+                      style={{ width: '100%', height: '34px', padding: '0', background: 'var(--bg-dark)', border: '1px solid var(--border)', borderRadius: '4px', cursor: 'pointer' }} 
+                    />
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+
+          {!selectedTimelineClipId && !selectedTextClipId && (
+            <div style={{ color: '#666', fontSize: '12px' }}>타임라인에서 클립이나 자막을 클릭하여 속성을 편집하세요.</div>
           )}
 
-          <div style={{ marginTop: '30px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
-            <h2 className="panel-title" style={{ fontSize: '14px' }}>💬 전역 텍스트 오버레이</h2>
-            <label style={{ display: 'block', marginBottom: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>화면에 표시될 자막을 입력하세요</label>
-            <textarea 
-              value={overlayText}
-              onChange={(e) => setOverlayText(e.target.value)}
-              style={{ width: '100%', height: '60px', padding: '8px', background: 'var(--bg-dark)', border: '1px solid var(--border)', color: 'white', borderRadius: '4px', resize: 'none' }}
-            />
+          <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '20px' }}>
+            <button 
+              className="btn-primary" 
+              onClick={() => {
+                const newText: TextClip = {
+                  id: Math.random().toString(36).substr(2, 9),
+                  text: "새로운 텍스트",
+                  x: 100, y: 150,
+                  startTime: currentTime,
+                  endTime: currentTime + 3.0,
+                  fontSize: 24,
+                  color: "#ffffff"
+                };
+                setTextClips(prev => [...prev, newText]);
+                setSelectedTimelineClipId(null);
+                setSelectedTextClipId(newText.id);
+              }}
+              style={{ width: '100%', padding: '10px', fontSize: '13px', background: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}
+            >
+              + 현재 시간에 텍스트 추가
+            </button>
           </div>
         </div>
       </aside>
@@ -590,10 +718,38 @@ function App() {
           </div>
           
           {/* Track 2: Text/Effect */}
-          <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative' }}>
-             <div style={{ position: 'absolute', left: '100px', width: '150px', height: '100%', background: '#10b981', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px' }}>
-                제목 텍스트
-             </div>
+          <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative', overflow: 'hidden' }}>
+             {textClips.length === 0 ? (
+               <div style={{ padding: '12px 20px', color: '#555', fontSize: '12px', fontStyle: 'italic' }}>우측의 '현재 시간에 텍스트 추가' 버튼을 눌러 자막을 생성하세요.</div>
+             ) : (
+               textClips.map((clip) => (
+                 <div 
+                   key={clip.id}
+                   onClick={(e) => { e.stopPropagation(); setSelectedTextClipId(clip.id); setSelectedTimelineClipId(null); }}
+                   style={{ 
+                     position: 'absolute', 
+                     left: `${clip.startTime * 20}px`, 
+                     width: `${Math.max(10, (clip.endTime - clip.startTime) * 20)}px`, 
+                     height: '100%', 
+                     background: selectedTextClipId === clip.id ? '#34d399' : '#10b981', 
+                     border: selectedTextClipId === clip.id ? '2px solid white' : '1px solid #059669',
+                     borderRadius: '4px', 
+                     display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px',
+                     cursor: 'pointer', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
+                   }}
+                 >
+                    {clip.text}
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTextClips(prev => prev.filter(c => c.id !== clip.id));
+                        if (selectedTextClipId === clip.id) setSelectedTextClipId(null);
+                      }}
+                      style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '14px', height: '14px', fontSize: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >X</button>
+                 </div>
+               ))
+             )}
           </div>
           {/* Track 3: Audio */}
           <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', position: 'relative' }}>
