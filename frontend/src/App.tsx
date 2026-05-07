@@ -102,6 +102,10 @@ function App() {
   const [textClips, setTextClips] = useState<TextClip[]>([]);
   const [selectedTextClipId, setSelectedTextClipId] = useState<string | null>(null);
 
+  const [hiddenTracks, setHiddenTracks] = useState<number[]>([]);
+  const [lockedTracks, setLockedTracks] = useState<number[]>([]);
+  const [trackContextMenu, setTrackContextMenu] = useState<{x: number, y: number, trackIdx: number} | null>(null);
+
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5 });
 
@@ -537,7 +541,7 @@ function App() {
             }}
           >
             <Layer>
-              {textClips.filter(t => currentTime >= t.startTime && currentTime <= t.endTime).map(tClip => (
+              {textClips.filter(t => currentTime >= t.startTime && currentTime <= t.endTime && !hiddenTracks.includes(t.trackIndex || 0)).map(tClip => (
                 <Text 
                   key={tClip.id}
                   text={tClip.text} 
@@ -828,8 +832,8 @@ function App() {
           style={{ flex: 1, padding: '20px', overflowX: 'auto', position: 'relative', cursor: 'text' }}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            // 패딩 20px + 헤더 40px 고려
-            const clickX = e.clientX - rect.left - 60;
+            // 패딩 20px + 헤더 80px 고려
+            const clickX = e.clientX - rect.left - 100;
             if (clickX >= 0) {
               setCurrentTime(clickX / 20); // 1초당 20px 기준
             }
@@ -838,7 +842,7 @@ function App() {
           {/* Playhead (빨간 선) */}
           <div style={{
             position: 'absolute',
-            left: `${60 + currentTime * 20}px`,
+            left: `${100 + currentTime * 20}px`,
             top: 0,
             bottom: 0,
             width: '2px',
@@ -851,8 +855,8 @@ function App() {
 
           {/* Track 1: Video (동적 타임라인 블록 렌더링) */}
           <div style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
-             <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
-                V1
+             <div style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}>
+                <span style={{ fontWeight: 'bold' }}>V1</span>
              </div>
              <div style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
                {timelineClips.length === 0 ? (
@@ -894,19 +898,40 @@ function App() {
           {/* Dynamic Text Tracks */}
           {Array.from({ length: Math.max(1, textClips.length > 0 ? Math.max(...textClips.map(t => t.trackIndex || 0)) + 1 : 1) }).map((_, trackIdx) => {
             const clipsInThisTrack = textClips.filter(t => (t.trackIndex || 0) === trackIdx);
+            const isHidden = hiddenTracks.includes(trackIdx);
+            const isLocked = lockedTracks.includes(trackIdx);
             return (
-              <div key={`text-track-${trackIdx}`} style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
-                 <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
-                   <button 
-                     onClick={(e) => {
-                       e.stopPropagation();
-                       if (window.confirm(`트랙 ${trackIdx + 1}의 모든 자막을 삭제하시겠습니까?`)) {
-                         setTextClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackIdx));
-                       }
-                     }}
-                     style={{ background: 'transparent', color: '#ef4444', border: 'none', cursor: 'pointer', fontSize: '14px', width: '100%', height: '100%' }}
-                     title={`트랙 ${trackIdx + 1} 전체 삭제`}
-                   >🗑️</button>
+              <div key={`text-track-${trackIdx}`} style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex', opacity: isHidden ? 0.5 : 1 }}>
+                 <div 
+                   onContextMenu={(e) => {
+                     e.preventDefault();
+                     setTrackContextMenu({ x: e.clientX, y: e.clientY, trackIdx });
+                   }}
+                   style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}
+                 >
+                   <span style={{ fontSize: '10px', color: '#888', fontWeight: 'bold' }}>T{trackIdx + 1}</span>
+                   <div style={{ display: 'flex', gap: '2px' }}>
+                     <button 
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         setHiddenTracks(prev => prev.includes(trackIdx) ? prev.filter(id => id !== trackIdx) : [...prev, trackIdx]);
+                       }}
+                       style={{ background: 'transparent', color: isHidden ? '#666' : '#fff', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
+                       title={isHidden ? `트랙 ${trackIdx + 1} 표시` : `트랙 ${trackIdx + 1} 숨기기`}
+                     >
+                       {isHidden ? '👁️‍🗨️' : '👁️'}
+                     </button>
+                     <button 
+                       onClick={(e) => {
+                         e.stopPropagation();
+                         setLockedTracks(prev => prev.includes(trackIdx) ? prev.filter(id => id !== trackIdx) : [...prev, trackIdx]);
+                       }}
+                       style={{ background: 'transparent', color: isLocked ? '#ef4444' : '#666', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
+                       title={isLocked ? `트랙 ${trackIdx + 1} 잠금 해제` : `트랙 ${trackIdx + 1} 잠금`}
+                     >
+                       {isLocked ? '🔒' : '🔓'}
+                     </button>
+                   </div>
                  </div>
                  <div style={{ flex: 1, position: 'relative' }}>
                    {clipsInThisTrack.length === 0 ? (
@@ -920,6 +945,7 @@ function App() {
                          onClick={(e) => { e.stopPropagation(); setSelectedTextClipId(clip.id); setSelectedTimelineClipId(null); }}
                          onMouseDown={(e) => {
                            e.stopPropagation();
+                           if (isLocked) return; // 잠긴 트랙 드래그 방지
                            setDraggingTextId(clip.id);
                            setDragTextStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialEnd: clip.endTime, initialTrack: clip.trackIndex || 0 });
                            setSelectedTextClipId(clip.id);
@@ -934,18 +960,20 @@ function App() {
                            border: selectedTextClipId === clip.id ? '2px solid white' : '1px solid #059669',
                            borderRadius: '4px', 
                            display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px',
-                           cursor: draggingTextId === clip.id ? 'grabbing' : 'grab', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
+                           cursor: isLocked ? 'not-allowed' : (draggingTextId === clip.id ? 'grabbing' : 'grab'), whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', boxSizing: 'border-box'
                          }}
                        >
                           {clip.text}
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTextClips(prev => prev.filter(c => c.id !== clip.id));
-                              if (selectedTextClipId === clip.id) setSelectedTextClipId(null);
-                            }}
-                            style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '14px', height: '14px', fontSize: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          >X</button>
+                          {!isLocked && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTextClips(prev => prev.filter(c => c.id !== clip.id));
+                                if (selectedTextClipId === clip.id) setSelectedTextClipId(null);
+                              }}
+                              style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '14px', height: '14px', fontSize: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            >X</button>
+                          )}
                        </div>
                      ))
                    )}
@@ -955,8 +983,8 @@ function App() {
           })}
           {/* Track 3: Audio */}
           <div style={{ height: '40px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
-             <div style={{ position: 'sticky', left: 0, width: '40px', minWidth: '40px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px' }}>
-                A1
+             <div style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}>
+                <span style={{ fontWeight: 'bold' }}>A1</span>
              </div>
              <div style={{ flex: 1, position: 'relative' }}>
                 <div style={{ position: 'absolute', left: '0px', width: '500px', height: '100%', background: '#8b5cf6', borderRadius: '4px', display: 'flex', alignItems: 'center', padding: '0 10px', fontSize: '12px' }}>
@@ -966,6 +994,58 @@ function App() {
           </div>
         </div>
       </section>
+
+      {/* 우클릭 컨텍스트 메뉴 (트랙 삭제) */}
+      {trackContextMenu && (() => {
+        const isLocked = lockedTracks.includes(trackContextMenu.trackIdx);
+        return (
+          <div 
+            style={{
+              position: 'fixed',
+              top: trackContextMenu.y,
+              left: trackContextMenu.x,
+              background: '#1f2937',
+              border: '1px solid #374151',
+              borderRadius: '6px',
+              padding: '4px',
+              zIndex: 9999,
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+            }}
+            onMouseLeave={() => setTrackContextMenu(null)} // 마우스 벗어나면 닫힘
+          >
+            <button 
+              onClick={() => {
+                if (isLocked) return;
+                if (window.confirm(`트랙 T${trackContextMenu.trackIdx + 1}을(를) 정말 삭제하시겠습니까?`)) {
+                  setTextClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackContextMenu.trackIdx));
+                }
+                setTrackContextMenu(null);
+              }}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '8px 12px',
+                background: 'transparent',
+                color: isLocked ? '#6b7280' : '#ef4444',
+                border: 'none',
+                cursor: isLocked ? 'not-allowed' : 'pointer',
+                fontSize: '13px',
+                borderRadius: '4px'
+              }}
+              onMouseEnter={(e) => {
+                if (!isLocked) e.currentTarget.style.background = '#374151';
+              }}
+              onMouseLeave={(e) => {
+                if (!isLocked) e.currentTarget.style.background = 'transparent';
+              }}
+              disabled={isLocked}
+            >
+              🗑️ 트랙 삭제 (Delete Track) {isLocked && '(잠김)'}
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
