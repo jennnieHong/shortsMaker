@@ -107,7 +107,9 @@ function App() {
 
   const [hiddenTracks, setHiddenTracks] = useState<number[]>([]);
   const [lockedTracks, setLockedTracks] = useState<number[]>([]);
-  const [trackContextMenu, setTrackContextMenu] = useState<{x: number, y: number, trackIdx: number} | null>(null);
+  const [hiddenVideoTracks, setHiddenVideoTracks] = useState<number[]>([]);
+  const [lockedVideoTracks, setLockedVideoTracks] = useState<number[]>([]);
+  const [trackContextMenu, setTrackContextMenu] = useState<{x: number, y: number, trackIdx: number, type: 'text' | 'video'} | null>(null);
 
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5 });
@@ -1015,10 +1017,40 @@ function App() {
           {/* Dynamic Video Tracks */}
           {Array.from({ length: Math.max(1, timelineClips.length > 0 ? Math.max(...timelineClips.map(c => c.trackIndex || 0)) + 1 : 1) }).map((_, trackIdx) => {
             const clipsInThisTrack = timelineClips.filter(c => (c.trackIndex || 0) === trackIdx);
+            const isHidden = hiddenVideoTracks.includes(trackIdx);
+            const isLocked = lockedVideoTracks.includes(trackIdx);
             return (
-              <div key={`video-track-${trackIdx}`} style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex' }}>
-                 <div style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}>
+              <div key={`video-track-${trackIdx}`} style={{ height: '60px', background: 'var(--bg-dark)', marginBottom: '10px', borderRadius: '4px', display: 'flex', opacity: isHidden ? 0.5 : 1 }}>
+                 <div 
+                   onContextMenu={(e) => {
+                     e.preventDefault();
+                     setTrackContextMenu({ x: e.clientX, y: e.clientY, trackIdx, type: 'video' });
+                   }}
+                   style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', fontSize: '10px', color: '#888', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}
+                 >
                     <span style={{ fontWeight: 'bold' }}>V{trackIdx + 1}</span>
+                    <div style={{ display: 'flex', gap: '2px' }}>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setHiddenVideoTracks(prev => prev.includes(trackIdx) ? prev.filter(id => id !== trackIdx) : [...prev, trackIdx]);
+                        }}
+                        style={{ background: 'transparent', color: isHidden ? '#666' : '#fff', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
+                        title={isHidden ? `트랙 ${trackIdx + 1} 표시` : `트랙 ${trackIdx + 1} 숨기기`}
+                      >
+                        {isHidden ? '👁️‍🗨️' : '👁️'}
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLockedVideoTracks(prev => prev.includes(trackIdx) ? prev.filter(id => id !== trackIdx) : [...prev, trackIdx]);
+                        }}
+                        style={{ background: 'transparent', color: isLocked ? '#ef4444' : '#666', border: 'none', cursor: 'pointer', fontSize: '12px', padding: '2px' }}
+                        title={isLocked ? `트랙 ${trackIdx + 1} 잠금 해제` : `트랙 ${trackIdx + 1} 잠금`}
+                      >
+                        {isLocked ? '🔒' : '🔓'}
+                      </button>
+                    </div>
                  </div>
                  <div style={{ flex: 1, position: 'relative' }}>
                    {clipsInThisTrack.length === 0 ? (
@@ -1032,6 +1064,7 @@ function App() {
                          onClick={(e) => { e.stopPropagation(); setSelectedTimelineClipId(clip.id); setSelectedTextClipId(null); }}
                          onMouseDown={(e) => {
                            e.stopPropagation();
+                           if (isLocked) return; // 잠긴 트랙 드래그 방지
                            setDraggingVideoId(clip.id);
                            setDragVideoStart({ x: e.clientX, y: e.clientY, initialStart: clip.startTime, initialTrack: clip.trackIndex || 0 });
                            setSelectedTimelineClipId(clip.id);
@@ -1051,18 +1084,20 @@ function App() {
                            padding: '0 10px', 
                            fontSize: '12px',
                            boxSizing: 'border-box',
-                           cursor: draggingVideoId === clip.id ? 'grabbing' : 'grab'
+                           cursor: isLocked ? 'not-allowed' : (draggingVideoId === clip.id ? 'grabbing' : 'grab')
                          }}
                        >
                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.assetName}</span>
-                         <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
-                              if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
-                            }}
-                            style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                          >X</button>
+                         {!isLocked && (
+                           <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTimelineClips(prev => prev.filter(c => c.id !== clip.id));
+                                if (selectedTimelineClipId === clip.id) setSelectedTimelineClipId(null);
+                              }}
+                              style={{ position: 'absolute', top: '4px', right: '4px', background: 'rgba(0,0,0,0.5)', color: 'white', border: 'none', borderRadius: '50%', width: '16px', height: '16px', fontSize: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                            >X</button>
+                         )}
                        </div>
                      ))
                    )}
@@ -1080,7 +1115,7 @@ function App() {
                  <div 
                    onContextMenu={(e) => {
                      e.preventDefault();
-                     setTrackContextMenu({ x: e.clientX, y: e.clientY, trackIdx });
+                     setTrackContextMenu({ x: e.clientX, y: e.clientY, trackIdx, type: 'text' });
                    }}
                    style={{ position: 'sticky', left: 0, width: '80px', minWidth: '80px', zIndex: 15, background: '#1f2937', borderRight: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 8px', borderTopLeftRadius: '4px', borderBottomLeftRadius: '4px', boxSizing: 'border-box' }}
                  >
@@ -1172,7 +1207,12 @@ function App() {
 
       {/* 우클릭 컨텍스트 메뉴 (트랙 삭제) */}
       {trackContextMenu && (() => {
-        const isLocked = lockedTracks.includes(trackContextMenu.trackIdx);
+        const isVideo = trackContextMenu.type === 'video';
+        const isLocked = isVideo 
+           ? lockedVideoTracks.includes(trackContextMenu.trackIdx) 
+           : lockedTracks.includes(trackContextMenu.trackIdx);
+        const trackName = `${isVideo ? 'V' : 'T'}${trackContextMenu.trackIdx + 1}`;
+        
         return (
           <div 
             style={{
@@ -1191,8 +1231,12 @@ function App() {
             <button 
               onClick={() => {
                 if (isLocked) return;
-                if (window.confirm(`트랙 T${trackContextMenu.trackIdx + 1}을(를) 정말 삭제하시겠습니까?`)) {
-                  setTextClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackContextMenu.trackIdx));
+                if (window.confirm(`트랙 ${trackName}을(를) 정말 삭제하시겠습니까?`)) {
+                  if (isVideo) {
+                    setTimelineClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackContextMenu.trackIdx));
+                  } else {
+                    setTextClips(prev => prev.filter(c => (c.trackIndex || 0) !== trackContextMenu.trackIdx));
+                  }
                 }
                 setTrackContextMenu(null);
               }}
