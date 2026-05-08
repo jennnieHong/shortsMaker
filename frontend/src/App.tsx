@@ -25,6 +25,10 @@ interface TimelineClip {
   scale: number;     // 1.0 ~ 3.0 (화면 확대 비율, 기본값 1.0)
   x?: number;        // 화면 내 X 픽셀 오프셋 (기본값 0)
   y?: number;        // 화면 내 Y 픽셀 오프셋 (기본값 0)
+  maskTop?: number;  // 0.0 ~ 1.0 (위쪽 테두리 자르기 비율)
+  maskBottom?: number;// 0.0 ~ 1.0 (아래쪽 테두리 자르기 비율)
+  maskLeft?: number; // 0.0 ~ 1.0 (왼쪽 테두리 자르기 비율)
+  maskRight?: number;// 0.0 ~ 1.0 (오른쪽 테두리 자르기 비율)
 }
 
 interface TextClip {
@@ -722,6 +726,7 @@ function App() {
                           objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // 팬앤스캔 크롭 좌표
                           transform: `translate(${clip.x || 0}px, ${clip.y || 0}px) scale(${clip.scale || 1.0})`,
                           transformOrigin: `${clip.cropX * 100}% ${clip.cropY * 100}%`,
+                          clipPath: `inset(${(clip.maskTop || 0) * 100}% ${(clip.maskRight || 0) * 100}% ${(clip.maskBottom || 0) * 100}% ${(clip.maskLeft || 0) * 100}%)`,
                           transition: isDraggingCanvas ? 'none' : 'object-position 0.1s ease, transform 0.1s ease',
                           zIndex: clip.trackIndex || 0 // CSS z-index로 레이어 강제
                         }}
@@ -886,6 +891,27 @@ function App() {
                     onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, cropY: parseFloat(e.target.value) } : c))}
                     style={{ width: '100%', cursor: 'ns-resize' }} 
                   />
+                </div>
+                <div style={{ marginTop: '15px', background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '10px', fontWeight: 'bold' }}>✂️ 테두리 자르기 (마스크)</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#888' }}>왼쪽</label>
+                      <input type="range" min="0" max="1" step="0.01" value={clip.maskLeft || 0} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, maskLeft: parseFloat(e.target.value) } : c))} style={{ width: '100%' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#888' }}>오른쪽</label>
+                      <input type="range" min="0" max="1" step="0.01" value={clip.maskRight || 0} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, maskRight: parseFloat(e.target.value) } : c))} style={{ width: '100%' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#888' }}>위쪽</label>
+                      <input type="range" min="0" max="1" step="0.01" value={clip.maskTop || 0} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, maskTop: parseFloat(e.target.value) } : c))} style={{ width: '100%' }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '10px', color: '#888' }}>아래쪽</label>
+                      <input type="range" min="0" max="1" step="0.01" value={clip.maskBottom || 0} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, maskBottom: parseFloat(e.target.value) } : c))} style={{ width: '100%' }} />
+                    </div>
+                  </div>
                 </div>
               </>
             );
