@@ -250,7 +250,7 @@ function App() {
     };
   }, [draggingVideoId, dragVideoStart]);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
   const stageRef = useRef<any>(null);
   const subtitleFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -269,20 +269,24 @@ function App() {
     reader.readAsText(file);
   };
 
-  // 현재 시간에 재생되어야 할 클립 계산 (다중 비디오 트랙)
-  let activeClip: TimelineClip | null = null;
-  let activeClipLocalTime = 0;
-
+  // 현재 시간에 재생되어야 할 클립 계산 (다중 비디오 트랙 레이어링)
   const overlappingVideoClips = timelineClips.filter(c => 
     currentTime >= c.startTime && currentTime < c.startTime + (c.trimEnd - c.trimStart)
   );
 
-  if (overlappingVideoClips.length > 0) {
-    // 트랙 번호가 높은(V2, V3...) 클립을 최우선으로 선택
-    overlappingVideoClips.sort((a, b) => (b.trackIndex || 0) - (a.trackIndex || 0));
-    activeClip = overlappingVideoClips[0];
-    activeClipLocalTime = activeClip.trimStart + (currentTime - activeClip.startTime);
+  const visibleVideoClips = overlappingVideoClips.filter(c => !hiddenVideoTracks.includes(c.trackIndex || 0));
+
+  // 플레이헤드 재생 로직 제어(단일 모드 정지 등)를 위한 최상단 클립
+  let topClip: TimelineClip | null = null;
+  if (visibleVideoClips.length > 0) {
+    const sorted = [...visibleVideoClips].sort((a, b) => (b.trackIndex || 0) - (a.trackIndex || 0));
+    topClip = sorted[0];
   }
+  
+  // 드래그/확대 등 화면 편집 타겟 클립 (현재 선택된 클립 우선, 없으면 최상단 클립)
+  const editingClip = selectedTimelineClipId 
+    ? visibleVideoClips.find(c => c.id === selectedTimelineClipId) || topClip
+    : topClip;
 
   // 플레이헤드 재생 로직 (버퍼링 중일 때는 시간 정지)
   useEffect(() => {
@@ -296,9 +300,9 @@ function App() {
             ? Math.max(...timelineClips.map(c => c.startTime + (c.trimEnd - c.trimStart))) 
             : 0;
 
-          // 단일 클립 모드: 클립의 끝에 도달하면 일시정지
-          if (!isContinuousPlay && activeClip) {
-             const currentClipEnd = activeClip.startTime + (activeClip.trimEnd - activeClip.trimStart);
+          // 단일 클립 모드: 최상단 클립의 끝에 도달하면 일시정지
+          if (!isContinuousPlay && topClip) {
+             const currentClipEnd = topClip.startTime + (topClip.trimEnd - topClip.trimStart);
              if (nextTime >= currentClipEnd) {
                setIsPlaying(false);
                return currentClipEnd - 0.01;
@@ -315,33 +319,36 @@ function App() {
       }, 100);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, isBuffering, timelineClips, isContinuousPlay, activeClip]);
+  }, [isPlaying, isBuffering, timelineClips, isContinuousPlay, topClip]);
 
-  // 비디오 탐색(Seek) 및 클립 연속 재생 동기화
+  // 비디오 탐색(Seek) 및 다중 클립 연속 재생 동기화
   useEffect(() => {
-    if (videoRef.current && activeClip) {
-      const video = videoRef.current;
-      
-      const handleSync = () => {
-        // 오차가 0.15초 이상일 때만 seek (잦은 탐색 방지)
-        if (Math.abs(video.currentTime - activeClipLocalTime) > 0.15) {
-           video.currentTime = activeClipLocalTime;
-        }
-        if (isPlaying && video.paused) {
-          video.play().catch((e: any) => console.error("Play error:", e));
-        } else if (!isPlaying && !video.paused) {
-          video.pause();
-        }
-      };
+    visibleVideoClips.forEach(clip => {
+      const video = videoRefs.current[clip.id];
+      if (video) {
+        const localTime = clip.trimStart + (currentTime - clip.startTime);
+        
+        const handleSync = () => {
+          // 오차가 0.15초 이상일 때만 seek (잦은 탐색 방지)
+          if (Math.abs(video.currentTime - localTime) > 0.15) {
+             video.currentTime = localTime;
+          }
+          if (isPlaying && video.paused) {
+            video.play().catch((e: any) => console.error("Play error:", e));
+          } else if (!isPlaying && !video.paused) {
+            video.pause();
+          }
+        };
 
-      if (video.readyState >= 1 /* HAVE_METADATA */) {
-        handleSync();
-      } else {
-        // 영상 소스가 갓 변경된 경우 로딩 완료될 때까지 기다림
-        video.addEventListener('loadedmetadata', handleSync, { once: true });
+        if (video.readyState >= 1 /* HAVE_METADATA */) {
+          handleSync();
+        } else {
+          // 영상 소스가 갓 변경된 경우 로딩 완료될 때까지 기다림
+          video.addEventListener('loadedmetadata', handleSync, { once: true });
+        }
       }
-    }
-  }, [currentTime, activeClip, activeClipLocalTime, isPlaying]);
+    });
+  }, [currentTime, visibleVideoClips, isPlaying]);
 
   const handleExport = async () => {
     if (timelineClips.length === 0) {
@@ -610,26 +617,26 @@ function App() {
           className="canvas-container" 
           style={{ 
             position: 'relative', width: 360, height: 640, flexShrink: 0, boxShadow: '0 10px 30px rgba(0,0,0,0.5)', overflow: 'hidden', backgroundColor: 'black',
-            cursor: activeClip ? (isDraggingCanvas ? 'grabbing' : 'grab') : 'default'
+            cursor: editingClip ? (isDraggingCanvas ? 'grabbing' : 'grab') : 'default'
           }}
           onWheel={(e) => {
-            if (!activeClip) return;
+            if (!editingClip) return;
             const delta = e.deltaY > 0 ? -0.1 : 0.1;
-            const newScale = Math.max(1.0, Math.min(5.0, (activeClip.scale || 1.0) + delta));
-            setTimelineClips(prev => prev.map(c => c.id === activeClip?.id ? { ...c, scale: newScale } : c));
+            const newScale = Math.max(1.0, Math.min(5.0, (editingClip.scale || 1.0) + delta));
+            setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, scale: newScale } : c));
           }}
           onMouseDown={(e) => {
-            if (!activeClip) return;
+            if (!editingClip) return;
             setIsDraggingCanvas(true);
-            setDragStartPos({ x: e.clientX, y: e.clientY, initialCropX: activeClip.cropX, initialCropY: activeClip.cropY });
+            setDragStartPos({ x: e.clientX, y: e.clientY, initialCropX: editingClip.cropX, initialCropY: editingClip.cropY });
           }}
           onMouseMove={(e) => {
-            if (!isDraggingCanvas || !activeClip) return;
+            if (!isDraggingCanvas || !editingClip) return;
             const deltaX = e.clientX - dragStartPos.x;
             const deltaY = e.clientY - dragStartPos.y;
             
             // 1:1 마우스 픽셀 매핑 계산 (가로 16:9 원본 영상 기준)
-            const scale = activeClip.scale || 1.0;
+            const scale = editingClip.scale || 1.0;
             // object-fit: cover 기준 렌더링된 비디오 크기 (가로 1137px, 세로 640px)
             const hiddenWidth = Math.max(1, (640 * (16/9) * scale) - 360);
             const hiddenHeight = Math.max(1, (640 * scale) - 640);
@@ -644,7 +651,7 @@ function App() {
             newCropX = Math.max(0, Math.min(1, newCropX));
             newCropY = Math.max(0, Math.min(1, newCropY));
 
-            setTimelineClips(prev => prev.map(c => c.id === activeClip?.id ? { ...c, cropX: newCropX, cropY: newCropY } : c));
+            setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, cropX: newCropX, cropY: newCropY } : c));
           }}
           onMouseUp={() => setIsDraggingCanvas(false)}
           onMouseLeave={() => setIsDraggingCanvas(false)}
@@ -665,23 +672,34 @@ function App() {
                 );
               }
 
-              if (activeClip) {
+              if (visibleVideoClips.length > 0) {
+                // V1(낮은 트랙)부터 그려서 V2(높은 트랙)가 위로 덮이도록 오름차순 정렬
+                const sortedClips = [...visibleVideoClips].sort((a, b) => (a.trackIndex || 0) - (b.trackIndex || 0));
+                
                 return (
-                  <video 
-                    ref={videoRef}
-                    src={activeClip.path} 
-                    style={{ 
-                      width: '100%', 
-                      height: '100%', 
-                      objectFit: 'cover', // 세로 화면에 꽉 차게 
-                      objectPosition: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`, // C++ 좌표와 매칭
-                      transform: `scale(${activeClip.scale || 1.0})`,
-                      transformOrigin: `${activeClip.cropX * 100}% ${activeClip.cropY * 100}%`,
-                      transition: 'object-position 0.1s ease, transform 0.1s ease'
-                    }}
-                    onWaiting={() => setIsBuffering(true)}
-                    onCanPlay={() => setIsBuffering(false)}
-                  />
+                  <>
+                    {sortedClips.map((clip, index) => (
+                      <video 
+                        key={clip.id}
+                        ref={(el) => { videoRefs.current[clip.id] = el; }}
+                        src={clip.path} 
+                        style={{ 
+                          position: 'absolute',
+                          top: 0, left: 0,
+                          width: '100%', 
+                          height: '100%', 
+                          objectFit: 'cover', // 세로 화면에 꽉 차게 
+                          objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // C++ 좌표와 매칭
+                          transform: `scale(${clip.scale || 1.0})`,
+                          transformOrigin: `${clip.cropX * 100}% ${clip.cropY * 100}%`,
+                          transition: 'object-position 0.1s ease, transform 0.1s ease',
+                          zIndex: clip.trackIndex || 0 // CSS z-index로 레이어 강제
+                        }}
+                        onWaiting={() => setIsBuffering(true)}
+                        onCanPlay={() => setIsBuffering(false)}
+                      />
+                    ))}
+                  </>
                 );
               }
 
