@@ -23,6 +23,8 @@ interface TimelineClip {
   cropX: number;     // 0.0 ~ 1.0 (X축 크롭 위치, 기본값 0.5)
   cropY: number;     // 0.0 ~ 1.0 (Y축 크롭 위치, 기본값 0.5)
   scale: number;     // 1.0 ~ 3.0 (화면 확대 비율, 기본값 1.0)
+  x?: number;        // 화면 내 X 픽셀 오프셋 (기본값 0)
+  y?: number;        // 화면 내 Y 픽셀 오프셋 (기본값 0)
 }
 
 interface TextClip {
@@ -112,7 +114,7 @@ function App() {
   const [trackContextMenu, setTrackContextMenu] = useState<{x: number, y: number, trackIdx: number, type: 'text' | 'video'} | null>(null);
 
   const [isDraggingCanvas, setIsDraggingCanvas] = useState(false);
-  const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5 });
+  const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0, initialCropX: 0.5, initialCropY: 0.5, initialX: 0, initialY: 0 });
 
   const [draggingTextId, setDraggingTextId] = useState<string | null>(null);
   const [dragTextStart, setDragTextStart] = useState<{ x: number, y: number, initialStart: number, initialEnd: number, initialTrack: number } | null>(null);
@@ -253,6 +255,19 @@ function App() {
   const videoRefs = useRef<{ [id: string]: HTMLVideoElement | null }>({});
   const stageRef = useRef<any>(null);
   const subtitleFileInputRef = useRef<HTMLInputElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const canvasEl = canvasContainerRef.current;
+    if (!canvasEl) return;
+    
+    // 비표준 passive wheel 이벤트를 방지하여 브라우저 스크롤을 막음
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+    };
+    canvasEl.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvasEl.removeEventListener('wheel', handleWheel);
+  }, []);
 
   const handleSubtitleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -614,6 +629,7 @@ function App() {
         )}
 
         <div 
+          ref={canvasContainerRef}
           className="canvas-container" 
           style={{ 
             position: 'relative', width: 360, height: 640, flexShrink: 0, boxShadow: '0 10px 30px rgba(0,0,0,0.5)', overflow: 'hidden', backgroundColor: 'black',
@@ -622,36 +638,50 @@ function App() {
           onWheel={(e) => {
             if (!editingClip) return;
             const delta = e.deltaY > 0 ? -0.1 : 0.1;
-            const newScale = Math.max(1.0, Math.min(5.0, (editingClip.scale || 1.0) + delta));
+            const newScale = Math.max(0.1, Math.min(5.0, (editingClip.scale || 1.0) + delta));
             setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, scale: newScale } : c));
           }}
           onMouseDown={(e) => {
             if (!editingClip) return;
             setIsDraggingCanvas(true);
-            setDragStartPos({ x: e.clientX, y: e.clientY, initialCropX: editingClip.cropX, initialCropY: editingClip.cropY });
+            setDragStartPos({ 
+              x: e.clientX, 
+              y: e.clientY, 
+              initialCropX: editingClip.cropX, 
+              initialCropY: editingClip.cropY,
+              initialX: editingClip.x || 0,
+              initialY: editingClip.y || 0
+            });
           }}
           onMouseMove={(e) => {
             if (!isDraggingCanvas || !editingClip) return;
             const deltaX = e.clientX - dragStartPos.x;
             const deltaY = e.clientY - dragStartPos.y;
             
-            // 1:1 마우스 픽셀 매핑 계산 (가로 16:9 원본 영상 기준)
             const scale = editingClip.scale || 1.0;
-            // object-fit: cover 기준 렌더링된 비디오 크기 (가로 1137px, 세로 640px)
-            const hiddenWidth = Math.max(1, (640 * (16/9) * scale) - 360);
-            const hiddenHeight = Math.max(1, (640 * scale) - 640);
+            
+            if (scale < 1.0) {
+              // 축소 모드 (PIP): 내용물이 아닌 영상 박스(Position X, Y) 자체를 이동
+              const newX = dragStartPos.initialX + deltaX;
+              const newY = dragStartPos.initialY + deltaY;
+              setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, x: newX, y: newY } : c));
+            } else {
+              // 확대/꽉찬 모드: 팬앤스캔 (내용물 훑어보기, Crop X, Y)
+              const hiddenWidth = (640 * (16/9) * scale) - 360;
+              const hiddenHeight = (640 * scale) - 640;
 
-            // 숨겨진 영역 픽셀 수의 역수를 곱하면 정확히 1픽셀 이동 시 1픽셀만큼 시각적으로 이동함
-            const factorX = 1 / hiddenWidth;
-            const factorY = 1 / hiddenHeight;
+              const factorX = hiddenWidth > 0 ? 1 / hiddenWidth : 1 / 360;
+              const factorY = hiddenHeight > 0 ? 1 / hiddenHeight : 1 / 640;
 
-            let newCropX = dragStartPos.initialCropX - (deltaX * factorX);
-            let newCropY = dragStartPos.initialCropY - (deltaY * factorY);
+              let newCropX = dragStartPos.initialCropX - (deltaX * factorX);
+              let newCropY = dragStartPos.initialCropY - (deltaY * factorY);
 
-            newCropX = Math.max(0, Math.min(1, newCropX));
-            newCropY = Math.max(0, Math.min(1, newCropY));
+              // [-1.0, 2.0] 제한
+              newCropX = Math.max(-1.0, Math.min(2.0, newCropX));
+              newCropY = Math.max(-1.0, Math.min(2.0, newCropY));
 
-            setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, cropX: newCropX, cropY: newCropY } : c));
+              setTimelineClips(prev => prev.map(c => c.id === editingClip?.id ? { ...c, cropX: newCropX, cropY: newCropY } : c));
+            }
           }}
           onMouseUp={() => setIsDraggingCanvas(false)}
           onMouseLeave={() => setIsDraggingCanvas(false)}
@@ -689,10 +719,10 @@ function App() {
                           width: '100%', 
                           height: '100%', 
                           objectFit: 'cover', // 세로 화면에 꽉 차게 
-                          objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // C++ 좌표와 매칭
-                          transform: `scale(${clip.scale || 1.0})`,
+                          objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // 팬앤스캔 크롭 좌표
+                          transform: `translate(${clip.x || 0}px, ${clip.y || 0}px) scale(${clip.scale || 1.0})`,
                           transformOrigin: `${clip.cropX * 100}% ${clip.cropY * 100}%`,
-                          transition: 'object-position 0.1s ease, transform 0.1s ease',
+                          transition: isDraggingCanvas ? 'none' : 'object-position 0.1s ease, transform 0.1s ease',
                           zIndex: clip.trackIndex || 0 // CSS z-index로 레이어 강제
                         }}
                         onWaiting={() => setIsBuffering(true)}
