@@ -23,6 +23,9 @@ struct ClipInfo {
     double cropX;
     double cropY;
     double scale;
+    bool fadeIn;
+    bool fadeOut;
+    std::string animation;
 };
 
 // 비동기 렌더링 작업을 수행할 워커 클래스 (Napi::AsyncWorker 상속)
@@ -63,8 +66,9 @@ public:
         // ----------------------------------------
         // 오디오 출력 스트림 설정 (Stream Copy 방식)
         // ----------------------------------------
-        AVStream* out_audio_stream = avformat_new_stream(ofmt_ctx, nullptr);
-        
+        AVStream* out_audio_stream = nullptr;
+        bool has_audio = false;
+
         if (!(ofmt_ctx->oformat->flags & AVFMT_NOFILE)) {
             if (avio_open(&ofmt_ctx->pb, outputPath.c_str(), AVIO_FLAG_WRITE) < 0) {
                 SetError("출력 파일을 생성할 수 없습니다."); return;
@@ -78,6 +82,8 @@ public:
                 avformat_find_stream_info(tmp_ctx, nullptr);
                 for (unsigned int i = 0; i < tmp_ctx->nb_streams; i++) {
                     if (tmp_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+                        has_audio = true;
+                        out_audio_stream = avformat_new_stream(ofmt_ctx, nullptr);
                         avcodec_parameters_copy(out_audio_stream->codecpar, tmp_ctx->streams[i]->codecpar);
                         out_audio_stream->codecpar->codec_tag = 0;
                         break;
@@ -249,9 +255,7 @@ public:
 
                 int target_w = (dec_h * 9 / 16) & ~1; 
                 int target_h = dec_h & ~1;
-                sws_ctx = sws_getContext(target_w, target_h, dec_ctx->pix_fmt,
-                                         720, 1280, AV_PIX_FMT_YUV420P,
-                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+                // sws_ctx는 루프 안에서 crop 크기에 따라 동적으로 생성/업데이트 됩니다.
             }
             
             if (audio_stream_idx != -1) {
@@ -265,6 +269,8 @@ public:
             av_seek_frame(ifmt_ctx, -1, start_pts, AVSEEK_FLAG_BACKWARD);
 
             bool video_done = false;
+            int last_crop_w = -1;
+            int last_crop_h = -1;
 
             while (av_read_frame(ifmt_ctx, pkt) >= 0 && !video_done) {
                 
@@ -292,13 +298,35 @@ public:
                             int in_h = proc_frame->height;
                             int target_w = (in_h * 9 / 16) & ~1; 
                             
-                            // Scale에 따라 잘라낼 실제 원본 픽셀 영역 크기 축소 (줌인 효과)
-                            double scale = clip.scale > 0.0 ? clip.scale : 1.0;
-                            int crop_w = (target_w / scale);
-                            int crop_h = (in_h / scale);
+                            // Scale에 따라 잘라낼 실제 원본 픽셀 영역 크기 축소 (줌인/줌아웃 효과)
+                            double clipDuration = clip.trimEnd - clip.trimStart;
+                            double clipCurrentTime = current_time_sec - clip.trimStart;
+                            double renderScale = clip.scale > 0.0 ? clip.scale : 1.0;
+                            
+                            if (clip.animation == "zoom-in") {
+                                double progress = std::max(0.0, std::min(1.0, clipCurrentTime / clipDuration));
+                                renderScale += progress * 0.2;
+                            } else if (clip.animation == "zoom-out") {
+                                double progress = std::max(0.0, std::min(1.0, clipCurrentTime / clipDuration));
+                                renderScale += (1.0 - progress) * 0.2;
+                            }
+
+                            // C++ sws_scale은 메모리 크러시(Segfault) 방지를 위해 축소(scale < 1.0)를 지원하지 않습니다.
+                            // PIP 모드나 축소를 구현하려면 FilterGraph(scale/pad/overlay)를 사용해야 합니다.
+                            if (renderScale < 1.0) renderScale = 1.0;
+
+                            int crop_w = (target_w / renderScale);
+                            int crop_h = (in_h / renderScale);
                             // 홀수 픽셀 에러 방지
                             crop_w &= ~1;
                             crop_h &= ~1;
+
+                            if (sws_ctx == nullptr || last_crop_w != crop_w || last_crop_h != crop_h) {
+                                if (sws_ctx) sws_freeContext(sws_ctx);
+                                sws_ctx = sws_getContext(crop_w, crop_h, dec_ctx->pix_fmt, 720, 1280, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                                last_crop_w = crop_w;
+                                last_crop_h = crop_h;
+                            }
                             
                             int max_crop_x = in_w - crop_w;
                             if (max_crop_x < 0) max_crop_x = 0;
@@ -321,6 +349,29 @@ public:
                                 src_data[2] += (crop_y/2) * src_linesize[2] + (crop_x/2);
                                 
                                 sws_scale(sws_ctx, src_data, src_linesize, 0, crop_h, out_frame->data, out_frame->linesize);
+
+                                // --- Opacity(페이드 인/아웃) 픽셀 블렌딩 ---
+                                double opacity = 1.0;
+                                if (clip.fadeIn && clipCurrentTime < 1.0) opacity = clipCurrentTime;
+                                if (clip.fadeOut && (clipDuration - clipCurrentTime) < 1.0) opacity = clipDuration - clipCurrentTime;
+                                opacity = std::max(0.0, std::min(1.0, opacity));
+                                
+                                if (opacity < 0.99) {
+                                    for(int y=0; y<1280; y++) {
+                                        for(int x=0; x<720; x++) {
+                                            out_frame->data[0][y * out_frame->linesize[0] + x] = 
+                                                (uint8_t)(out_frame->data[0][y * out_frame->linesize[0] + x] * opacity + 16 * (1.0 - opacity));
+                                        }
+                                    }
+                                    for(int y=0; y<640; y++) {
+                                        for(int x=0; x<360; x++) {
+                                            out_frame->data[1][y * out_frame->linesize[1] + x] = 
+                                                (uint8_t)((out_frame->data[1][y * out_frame->linesize[1] + x] - 128) * opacity + 128);
+                                            out_frame->data[2][y * out_frame->linesize[2] + x] = 
+                                                (uint8_t)((out_frame->data[2][y * out_frame->linesize[2] + x] - 128) * opacity + 128);
+                                        }
+                                    }
+                                }
 
                                 out_frame->pts = global_video_pts++;
                                 
@@ -361,7 +412,7 @@ public:
                 }
                 
                 // --- 오디오 처리 (Stream Copy) ---
-                else if (pkt->stream_index == audio_stream_idx && in_audio_stream) {
+                else if (has_audio && pkt->stream_index == audio_stream_idx && in_audio_stream && out_audio_stream) {
                     double current_time_sec = pkt->pts * av_q2d(in_audio_stream->time_base);
                     if (current_time_sec >= clip.trimStart && current_time_sec <= clip.trimEnd) {
                         
@@ -444,7 +495,10 @@ Napi::Value RenderVideo(const Napi::CallbackInfo& info) {
         double cropX = clipObj.Has("cropX") ? clipObj.Get("cropX").As<Napi::Number>().DoubleValue() : 0.5;
         double cropY = clipObj.Has("cropY") ? clipObj.Get("cropY").As<Napi::Number>().DoubleValue() : 0.5;
         double scale = clipObj.Has("scale") ? clipObj.Get("scale").As<Napi::Number>().DoubleValue() : 1.0;
-        clips.push_back({ path, trimStart, trimEnd, cropX, cropY, scale });
+        bool fadeIn = clipObj.Has("fadeIn") && clipObj.Get("fadeIn").IsBoolean() ? clipObj.Get("fadeIn").As<Napi::Boolean>().Value() : false;
+        bool fadeOut = clipObj.Has("fadeOut") && clipObj.Get("fadeOut").IsBoolean() ? clipObj.Get("fadeOut").As<Napi::Boolean>().Value() : false;
+        std::string animation = clipObj.Has("animation") && clipObj.Get("animation").IsString() ? clipObj.Get("animation").As<Napi::String>().Utf8Value() : "none";
+        clips.push_back({ path, trimStart, trimEnd, cropX, cropY, scale, fadeIn, fadeOut, animation });
     }
     std::string outputPath = info[1].As<Napi::String>().Utf8Value();
     std::string overlayPath = "";

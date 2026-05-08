@@ -34,6 +34,9 @@ interface TimelineClip {
   maskCenterY?: number; // 0.0 ~ 1.0 (마스크 중심 Y, 기본 0.5)
   maskRadiusX?: number; // 0.0 ~ 1.0 (마스크 가로 반지름, 기본 0.5)
   maskRadiusY?: number; // 0.0 ~ 1.0 (마스크 세로 반지름, 기본 0.5)
+  fadeIn?: boolean;     // 1초 페이드 인
+  fadeOut?: boolean;    // 1초 페이드 아웃
+  animation?: 'none' | 'zoom-in' | 'zoom-out'; // 줌 애니메이션 프리셋
 }
 
 interface TextClip {
@@ -379,14 +382,39 @@ function App() {
       setRenderStatus("하단 타임라인에 비디오를 먼저 추가해주세요.");
       return;
     }
+    
+    // V1(배경) 클립과 V2 이상(오버레이) 클립 분리
+    const v1Clips = timelineClips.filter(c => (c.trackIndex || 0) === 0);
+    const v2Clips = timelineClips.filter(c => (c.trackIndex || 0) > 0);
+    
+    if (v1Clips.length === 0) {
+      setRenderStatus("에러: V1(배경) 트랙에 최소 1개의 영상이 있어야 합니다.");
+      return;
+    }
+
     try {
-      setRenderStatus("C++ 엔진 호출 중... (모든 타임라인 영상 인코딩 중)");
+      setRenderStatus("프론트엔드 오프스크린 렌더링 중... (화면 캡처 중, 잠시만 기다려주세요)");
+      
+      let overlayBase64: any = textClips; // 텍스트만 있으면 ASS 생성용으로 넘김
+
+      // V2 이상 클립이나 텍스트가 있다면 WebM 오버레이 생성 (하이브리드 방식)
+      if (v2Clips.length > 0 || textClips.length > 0) {
+         const totalDuration = Math.max(
+           ...timelineClips.map(c => c.startTime + (c.trimEnd - c.trimStart)),
+           ...textClips.map(t => t.endTime)
+         );
+         
+         overlayBase64 = await recordOverlayCanvas(v2Clips, textClips, totalDuration);
+      }
+
+      setRenderStatus("C++ 엔진 호출 중... (배경 인코딩 및 오버레이 합성 중)");
       
       // @ts-ignore
       if (window.electronAPI) {
+        // C++ 엔진에는 V1 클립들만 넘기고, 나머지는 투명 WebM 오버레이로 전달
         // @ts-ignore
-        const result = await window.electronAPI.renderVideo(timelineClips, outputPath, textClips);
-        setRenderStatus(result); // 알림창 대신 UI에 상태 표시
+        const result = await window.electronAPI.renderVideo(v1Clips, outputPath, overlayBase64);
+        setRenderStatus(result);
       } else {
         setRenderStatus("Electron 환경이 아닙니다.");
       }
@@ -394,6 +422,134 @@ function App() {
       console.error(error);
       setRenderStatus("렌더링 실패: " + error);
     }
+  };
+
+  // 캔버스 레코딩 (하이브리드 렌더링 핵심 로직)
+  const recordOverlayCanvas = async (v2Clips: TimelineClip[], tClips: TextClip[], maxDuration: number): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 720;
+      canvas.height = 1280;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject("Canvas 2D context failed");
+
+      // 비디오 엘리먼트 수집
+      const overlayVideos: { clip: TimelineClip, el: HTMLVideoElement }[] = [];
+      v2Clips.forEach(c => {
+         const el = videoRefs.current[c.id];
+         if (el) overlayVideos.push({ clip: c, el });
+      });
+
+      const stream = canvas.captureStream(30);
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      
+      recorder.onstop = async () => {
+         const blob = new Blob(chunks, { type: 'video/webm' });
+         const buffer = await blob.arrayBuffer();
+         const base64 = Buffer.from(buffer).toString('base64');
+         resolve(`data:video/webm;base64,${base64}`);
+      };
+
+      recorder.start();
+
+      let recTime = 0;
+      const fps = 30;
+      const step = 1 / fps;
+      
+      // 오프스크린 렌더링 루프 (비실시간 강제 프레임 진행)
+      const renderFrame = async () => {
+         if (recTime > maxDuration) {
+            recorder.stop();
+            return;
+         }
+
+         ctx.clearRect(0, 0, 720, 1280);
+
+         // 1. V2 비디오 그리기
+         for (const item of overlayVideos) {
+            const c = item.clip;
+            if (recTime >= c.startTime && recTime <= c.startTime + (c.trimEnd - c.trimStart)) {
+               const vTime = c.trimStart + (recTime - c.startTime);
+               // 비디오 프레임 동기화를 위해 수동으로 currentTime 설정 (오프스크린 렌더링의 핵심)
+               if (Math.abs(item.el.currentTime - vTime) > 0.05) {
+                   item.el.currentTime = vTime;
+                   // seek 완료 대기 (실제 구현 시 약간의 비동기 대기 필요할 수 있음)
+                   await new Promise(r => setTimeout(r, 10)); 
+               }
+
+               ctx.save();
+               
+               // 페이드 인/아웃 계산
+               let opacity = 1.0;
+               const clipLocalTime = recTime - c.startTime;
+               const duration = c.trimEnd - c.trimStart;
+               if (c.fadeIn && clipLocalTime < 1.0) opacity = clipLocalTime;
+               if (c.fadeOut && (duration - clipLocalTime) < 1.0) opacity = duration - clipLocalTime;
+               ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+
+               // 위치 이동 및 스케일
+               const renderScale = c.scale || 1.0;
+               // translate는 영상의 0,0 좌표를 화면 x,y로 이동
+               ctx.translate(c.x || 0, c.y || 0);
+
+               // 마스크(clip-path) 적용
+               if (c.maskShape === 'circle') {
+                  ctx.beginPath();
+                  ctx.arc((c.maskCenterX||0.5)*720, (c.maskCenterY||0.5)*1280, (c.maskRadiusX||0.5)*720, 0, Math.PI*2);
+                  ctx.clip();
+               } else if (c.maskShape === 'ellipse') {
+                  ctx.beginPath();
+                  ctx.ellipse((c.maskCenterX||0.5)*720, (c.maskCenterY||0.5)*1280, (c.maskRadiusX||0.4)*720, (c.maskRadiusY||0.25)*1280, 0, 0, Math.PI*2);
+                  ctx.clip();
+               }
+
+               // 줌 애니메이션
+               let currentScale = renderScale;
+               if (c.animation === 'zoom-in') currentScale += (clipLocalTime / duration) * 0.2;
+               else if (c.animation === 'zoom-out') currentScale += (1.0 - clipLocalTime / duration) * 0.2;
+               
+               ctx.translate((c.cropX||0.5)*720, (c.cropY||0.5)*1280);
+               ctx.scale(currentScale, currentScale);
+               ctx.translate(-(c.cropX||0.5)*720, -(c.cropY||0.5)*1280);
+
+               // 비디오 원본 비율에 맞게 크롭 렌더링
+               const vAspect = item.el.videoWidth / item.el.videoHeight;
+               const cAspect = 720 / 1280;
+               let drawW = 720, drawH = 1280, offsetX = 0, offsetY = 0;
+               if (vAspect > cAspect) {
+                   drawW = 1280 * vAspect;
+                   offsetX = (720 - drawW) * (c.cropX || 0.5);
+               } else {
+                   drawH = 720 / vAspect;
+                   offsetY = (1280 - drawH) * (c.cropY || 0.5);
+               }
+               ctx.drawImage(item.el, offsetX, offsetY, drawW, drawH);
+               ctx.restore();
+            }
+         }
+
+         // 2. 텍스트 그리기 (단순 HTML Canvas FillText)
+         tClips.forEach(t => {
+            if (recTime >= t.startTime && recTime <= t.endTime) {
+               ctx.save();
+               ctx.font = `bold ${t.fontSize * 2}px Inter`;
+               ctx.fillStyle = t.color || "white";
+               ctx.textAlign = "center";
+               ctx.shadowColor = "rgba(0,0,0,0.8)";
+               ctx.shadowBlur = 10;
+               ctx.fillText(t.text, (t.x || 360) * 2, (t.y || 320) * 2);
+               ctx.restore();
+            }
+         });
+
+         recTime += step;
+         setTimeout(renderFrame, 1000 / fps); // 실제 시간에 맞춰 레코딩 진행
+      };
+
+      renderFrame();
+    });
   };
 
   return (
@@ -717,32 +873,56 @@ function App() {
                 
                 return (
                   <>
-                    {sortedClips.map((clip, index) => (
-                      <video 
-                        key={clip.id}
-                        ref={(el) => { videoRefs.current[clip.id] = el; }}
-                        src={clip.path} 
-                        style={{ 
-                          position: 'absolute',
-                          top: 0, left: 0,
-                          width: '100%', 
-                          height: '100%', 
-                          objectFit: 'cover', // 세로 화면에 꽉 차게 
-                          objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // 팬앤스캔 크롭 좌표
-                          transform: `translate(${clip.x || 0}px, ${clip.y || 0}px) scale(${clip.scale || 1.0})`,
-                          transformOrigin: `${clip.cropX * 100}% ${clip.cropY * 100}%`,
-                          clipPath: clip.maskShape === 'circle' 
-                            ? `circle(${(clip.maskRadiusX ?? 0.5) * 100}% at ${(clip.maskCenterX ?? 0.5) * 100}% ${(clip.maskCenterY ?? 0.5) * 100}%)` 
-                            : clip.maskShape === 'ellipse' 
-                              ? `ellipse(${(clip.maskRadiusX ?? 0.4) * 100}% ${(clip.maskRadiusY ?? 0.25) * 100}% at ${(clip.maskCenterX ?? 0.5) * 100}% ${(clip.maskCenterY ?? 0.5) * 100}%)` 
-                              : `inset(${(clip.maskTop || 0) * 100}% ${(clip.maskRight || 0) * 100}% ${(clip.maskBottom || 0) * 100}% ${(clip.maskLeft || 0) * 100}%)`,
-                          transition: isDraggingCanvas ? 'none' : 'object-position 0.1s ease, transform 0.1s ease',
-                          zIndex: clip.trackIndex || 0 // CSS z-index로 레이어 강제
-                        }}
-                        onWaiting={() => setIsBuffering(true)}
-                        onCanPlay={() => setIsBuffering(false)}
-                      />
-                    ))}
+                    {sortedClips.map((clip, index) => {
+                      const clipDuration = clip.trimEnd - clip.trimStart;
+                      const clipCurrentTime = currentTime - clip.startTime;
+                      
+                      let opacity = 1.0;
+                      if (clip.fadeIn && clipCurrentTime < 1.0) {
+                        opacity = Math.max(0, clipCurrentTime);
+                      }
+                      if (clip.fadeOut && (clip.startTime + clipDuration - currentTime) < 1.0) {
+                        opacity = Math.max(0, clip.startTime + clipDuration - currentTime);
+                      }
+                      opacity = Math.max(0, Math.min(1, opacity));
+
+                      let renderScale = clip.scale || 1.0;
+                      if (clip.animation === 'zoom-in') {
+                        const progress = Math.max(0, Math.min(1, clipCurrentTime / clipDuration));
+                        renderScale += progress * 0.2; // 0.2만큼 천천히 확대
+                      } else if (clip.animation === 'zoom-out') {
+                        const progress = Math.max(0, Math.min(1, clipCurrentTime / clipDuration));
+                        renderScale += (1 - progress) * 0.2; // 0.2에서 0으로 서서히 축소
+                      }
+
+                      return (
+                        <video 
+                          key={clip.id}
+                          ref={(el) => { videoRefs.current[clip.id] = el; }}
+                          src={clip.path} 
+                          style={{ 
+                            position: 'absolute',
+                            top: 0, left: 0,
+                            width: '100%', 
+                            height: '100%', 
+                            objectFit: 'cover', // 세로 화면에 꽉 차게 
+                            objectPosition: `${clip.cropX * 100}% ${clip.cropY * 100}%`, // 팬앤스캔 크롭 좌표
+                            transform: `translate(${clip.x || 0}px, ${clip.y || 0}px) scale(${renderScale})`,
+                            transformOrigin: `${clip.cropX * 100}% ${clip.cropY * 100}%`,
+                            clipPath: clip.maskShape === 'circle' 
+                              ? `circle(${(clip.maskRadiusX ?? 0.5) * 100}% at ${(clip.maskCenterX ?? 0.5) * 100}% ${(clip.maskCenterY ?? 0.5) * 100}%)` 
+                              : clip.maskShape === 'ellipse' 
+                                ? `ellipse(${(clip.maskRadiusX ?? 0.4) * 100}% ${(clip.maskRadiusY ?? 0.25) * 100}% at ${(clip.maskCenterX ?? 0.5) * 100}% ${(clip.maskCenterY ?? 0.5) * 100}%)` 
+                                : `inset(${(clip.maskTop || 0) * 100}% ${(clip.maskRight || 0) * 100}% ${(clip.maskBottom || 0) * 100}% ${(clip.maskLeft || 0) * 100}%)`,
+                            opacity: opacity,
+                            transition: isDraggingCanvas ? 'none' : 'object-position 0.1s ease, transform 0.1s ease',
+                            zIndex: clip.trackIndex || 0 // CSS z-index로 레이어 강제
+                          }}
+                          onWaiting={() => setIsBuffering(true)}
+                          onCanPlay={() => setIsBuffering(false)}
+                        />
+                      );
+                    })}
                   </>
                 );
               }
@@ -971,6 +1151,32 @@ function App() {
                       </div>
                     </div>
                   )}
+                </div>
+                
+                <div style={{ marginTop: '15px', background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '10px', fontWeight: 'bold' }}>✨ 애니메이션 프리셋 (1초 전환)</div>
+                  <div style={{ display: 'flex', gap: '15px', marginBottom: '10px' }}>
+                    <label style={{ fontSize: '11px', color: 'white', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <input type="checkbox" checked={clip.fadeIn || false} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, fadeIn: e.target.checked } : c))} />
+                      페이드 인 (나타나기)
+                    </label>
+                    <label style={{ fontSize: '11px', color: 'white', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <input type="checkbox" checked={clip.fadeOut || false} onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, fadeOut: e.target.checked } : c))} />
+                      페이드 아웃 (사라지기)
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', color: '#888' }}>줌 애니메이션</span>
+                    <select 
+                      value={clip.animation || 'none'} 
+                      onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, animation: e.target.value as any } : c))}
+                      style={{ background: '#333', color: 'white', border: 'none', borderRadius: '4px', fontSize: '11px', padding: '4px 8px' }}
+                    >
+                      <option value="none">없음</option>
+                      <option value="zoom-in">서서히 확대 (Zoom In)</option>
+                      <option value="zoom-out">서서히 축소 (Zoom Out)</option>
+                    </select>
+                  </div>
                 </div>
               </>
             );

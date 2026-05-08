@@ -87,6 +87,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\
       const base64Data = overlayBase64.replace(/^data:image\/png;base64,/, "");
       fs.writeFileSync(overlayImagePath, base64Data, 'base64');
       console.log('[Electron Main] 오버레이 PNG 임시 저장 완료:', overlayImagePath);
+    } else if (typeof overlayBase64 === 'string' && overlayBase64.startsWith('data:video/webm')) {
+      overlayImagePath = path.join(__dirname, 'temp_overlay.webm');
+      const base64Data = overlayBase64.replace(/^data:video\/webm;base64,/, "");
+      fs.writeFileSync(overlayImagePath, base64Data, 'base64');
+      console.log('[Electron Main] 오버레이 WebM 임시 저장 완료:', overlayImagePath);
     }
     
     // C++ 엔진의 renderVideo 함수를 호출합니다. (세 번째 인자로 overlayImagePath 전달)
