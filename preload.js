@@ -4,5 +4,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   renderVideo: (clips, outputPath, overlayBase64) => ipcRenderer.invoke('render-video', clips, outputPath, overlayBase64),
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory')
+  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
+  showSaveDialog: () => ipcRenderer.invoke('dialog:saveFile')
 });

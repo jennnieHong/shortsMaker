@@ -117,7 +117,7 @@ public:
             if (sanitizedOverlay.length() >= 4 && sanitizedOverlay.substr(sanitizedOverlay.length() - 4) == ".ass") {
                 snprintf(filter_desc, sizeof(filter_desc), "subtitles=filename='%s'", escapedOverlay.c_str());
             } else {
-                snprintf(filter_desc, sizeof(filter_desc), "movie=filename='%s' [wm]; [in] [wm] overlay=0:0 [out]", escapedOverlay.c_str());
+                snprintf(filter_desc, sizeof(filter_desc), "movie=filename='%s' [wm]; [wm]setpts=PTS-STARTPTS[wm_pts]; [in][wm_pts]overlay=0:0[out]", escapedOverlay.c_str());
             }
 
             const AVFilter *buffersrc  = avfilter_get_by_name("buffer");
@@ -132,8 +132,8 @@ public:
             avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in", args, nullptr, filter_graph);
             avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", nullptr, nullptr, filter_graph);
             
-            enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE };
-            av_opt_set_int_list(buffersink_ctx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+            // buffersink는 이미 초기화되었으므로 런타임에 pix_fmts를 설정하면 경고가 발생합니다.
+            // 대신 filter_graph_config 과정에서 자동으로 YUV420P로 협상됩니다.
 
             outputs->name       = av_strdup("in");
             outputs->filter_ctx = buffersrc_ctx;

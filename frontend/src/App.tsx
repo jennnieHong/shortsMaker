@@ -393,31 +393,40 @@ function App() {
     }
 
     try {
+      // @ts-ignore
+      if (!window.electronAPI) {
+         setRenderStatus("Electron 환경이 아닙니다.");
+         return;
+      }
+
+      // 저장할 경로를 사용자에게 묻기 (기본값 대신 다이얼로그 띄우기)
+      // @ts-ignore
+      const savePath = await window.electronAPI.showSaveDialog();
+      if (!savePath) {
+         setRenderStatus("저장이 취소되었습니다.");
+         return;
+      }
+      setOutputPath(savePath);
+
       setRenderStatus("프론트엔드 오프스크린 렌더링 중... (화면 캡처 중, 잠시만 기다려주세요)");
       
-      let overlayBase64: any = textClips; // 텍스트만 있으면 ASS 생성용으로 넘김
-
-      // V2 이상 클립이나 텍스트가 있다면 WebM 오버레이 생성 (하이브리드 방식)
-      if (v2Clips.length > 0 || textClips.length > 0) {
-         const totalDuration = Math.max(
-           ...timelineClips.map(c => c.startTime + (c.trimEnd - c.trimStart)),
-           ...textClips.map(t => t.endTime)
-         );
-         
-         overlayBase64 = await recordOverlayCanvas(v2Clips, textClips, totalDuration);
-      }
+      // 완벽한 WYSIWYG(보이는 그대로 렌더링)를 위해 V1, V2, 텍스트 모두 캔버스에서 WebM으로 캡처합니다.
+      // C++ 엔진은 V1의 오디오를 추출하고, 화면은 이 WebM으로 완전히 덮어씁니다.
+      const totalDuration = Math.max(
+        ...timelineClips.map(c => c.startTime + (c.trimEnd - c.trimStart)),
+        ...textClips.map(t => t.endTime),
+        0
+      );
+      
+      const overlayBase64 = await recordOverlayCanvas(timelineClips, textClips, totalDuration, setRenderStatus);
 
       setRenderStatus("C++ 엔진 호출 중... (배경 인코딩 및 오버레이 합성 중)");
       
+      // C++ 엔진에는 V1 클립들만 넘기고, 나머지는 투명 WebM 오버레이로 전달
       // @ts-ignore
-      if (window.electronAPI) {
-        // C++ 엔진에는 V1 클립들만 넘기고, 나머지는 투명 WebM 오버레이로 전달
-        // @ts-ignore
-        const result = await window.electronAPI.renderVideo(v1Clips, outputPath, overlayBase64);
-        setRenderStatus(result);
-      } else {
-        setRenderStatus("Electron 환경이 아닙니다.");
-      }
+      const result = await window.electronAPI.renderVideo(v1Clips, savePath, overlayBase64);
+      setRenderStatus(`완료! 저장 위치: ${savePath}`);
+      alert(`성공적으로 저장되었습니다!\n\n경로: ${savePath}`);
     } catch (error) {
       console.error(error);
       setRenderStatus("렌더링 실패: " + error);
@@ -425,132 +434,247 @@ function App() {
   };
 
   // 캔버스 레코딩 (하이브리드 렌더링 핵심 로직)
-  const recordOverlayCanvas = async (v2Clips: TimelineClip[], tClips: TextClip[], maxDuration: number): Promise<string> => {
-    return new Promise((resolve, reject) => {
+  const recordOverlayCanvas = async (allClips: TimelineClip[], tClips: TextClip[], maxDuration: number, progressCallback: Function): Promise<string> => {
+    return new Promise(async (resolve, reject) => {
       const canvas = document.createElement('canvas');
       canvas.width = 720;
       canvas.height = 1280;
       const ctx = canvas.getContext('2d');
       if (!ctx) return reject("Canvas 2D context failed");
 
-      // 비디오 엘리먼트 수집
-      const overlayVideos: { clip: TimelineClip, el: HTMLVideoElement }[] = [];
-      v2Clips.forEach(c => {
-         const el = videoRefs.current[c.id];
-         if (el) overlayVideos.push({ clip: c, el });
+      console.log(`[recordOverlayCanvas] 시작. 클립수=${allClips.length}, 최대길이=${maxDuration}초`);
+      // 클립 효과값 로깅 (진단용)
+      allClips.forEach((c, i) => {
+        console.log(`[clip ${i}] trackIndex=${c.trackIndex}, startTime=${c.startTime}, trimStart=${c.trimStart}, trimEnd=${c.trimEnd}, scale=${c.scale}, cropX=${c.cropX}, cropY=${c.cropY}, maskShape=${c.maskShape}, x=${c.x}, y=${c.y}, path=${c.path.split(/[\\/]/).pop()}`);
       });
+
+      // ★ 디버그용 캔버스를 화면에 표시하여 실제 렌더링 내용 확인
+      canvas.style.cssText = 'position:fixed;top:10px;right:10px;width:180px;height:320px;z-index:99999;border:3px solid red;opacity:0.85;pointer-events:none;';
+      canvas.title = '렌더링 미리보기 (디버그)';
+      document.body.appendChild(canvas);
+
+      // ★ 비디오도 DOM에 붙임 (Chromium GPU 디코딩 → SW 디코딩 강제 전환)
+      const videoContainer = document.createElement('div');
+      videoContainer.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;overflow:hidden;opacity:0.01;pointer-events:none;';
+      document.body.appendChild(videoContainer);
+
+      const overlayVideos: { clip: TimelineClip, el: HTMLVideoElement, started: boolean }[] = [];
+      progressCallback("비디오 소스 준비 중...");
+
+      for (const c of allClips) {
+        try {
+          const el = document.createElement('video');
+          el.muted = true;
+          el.playsInline = true;
+          el.preload = 'auto';
+          el.style.cssText = 'width:1px;height:1px;';
+          videoContainer.appendChild(el); // ← DOM에 붙임!
+
+          await new Promise<void>((res) => {
+            const timeout = setTimeout(() => {
+              console.warn('[recordOverlayCanvas] 비디오 로드 타임아웃:', c.path);
+              res();
+            }, 15000);
+
+            const doSeek = () => {
+              if (c.trimStart > 0.01) {
+                const onSeeked = () => {
+                  el.removeEventListener('seeked', onSeeked);
+                  clearTimeout(timeout);
+                  console.log(`[recordOverlayCanvas] Seek 완료 → ${c.trimStart}s, readyState=${el.readyState}`);
+                  res();
+                };
+                el.addEventListener('seeked', onSeeked);
+                el.currentTime = c.trimStart;
+              } else {
+                clearTimeout(timeout);
+                console.log(`[recordOverlayCanvas] 로드 완료 (trimStart≈0): readyState=${el.readyState}`);
+                res();
+              }
+            };
+
+            el.addEventListener('canplay', () => doSeek(), { once: true });
+            el.addEventListener('error', (e) => {
+              clearTimeout(timeout);
+              console.error('[recordOverlayCanvas] 비디오 로드 에러:', c.path, e);
+              res();
+            }, { once: true });
+
+            el.src = c.path;
+            el.load();
+          });
+
+          console.log(`[recordOverlayCanvas] 준비됨: ${c.path.split(/[\\/]/).pop()}, size=${el.videoWidth}x${el.videoHeight}, readyState=${el.readyState}`);
+          overlayVideos.push({ clip: c, el, started: false });
+        } catch (err) {
+          console.warn("오프스크린 비디오 로드 실패:", c.path, err);
+        }
+      }
+
+      console.log(`[recordOverlayCanvas] ${overlayVideos.length}개 비디오 준비 완료. MediaRecorder 시작.`);
 
       const stream = canvas.captureStream(30);
       const recorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp8' });
       const chunks: Blob[] = [];
-      recorder.ondataavailable = e => chunks.push(e.data);
-      
-      recorder.onstop = async () => {
-         const blob = new Blob(chunks, { type: 'video/webm' });
-         const buffer = await blob.arrayBuffer();
-         const base64 = Buffer.from(buffer).toString('base64');
-         resolve(`data:video/webm;base64,${base64}`);
+      recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+      recorder.onstop = () => {
+        const totalSize = chunks.reduce((s, c) => s + c.size, 0);
+        console.log(`[recordOverlayCanvas] 녹화 완료. 청크=${chunks.length}개, 크기=${(totalSize/1024).toFixed(0)}KB`);
+        // 컨테이너 및 디버그 캔버스 정리
+        try { document.body.removeChild(videoContainer); } catch(e) {}
+        try { document.body.removeChild(canvas); } catch(e) {}
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject("FileReader error");
       };
 
-      recorder.start();
+      recorder.start(200);
 
-      let recTime = 0;
-      const fps = 30;
-      const step = 1 / fps;
-      
-      // 오프스크린 렌더링 루프 (비실시간 강제 프레임 진행)
-      const renderFrame = async () => {
-         if (recTime > maxDuration) {
-            recorder.stop();
-            return;
-         }
+      const startMs = performance.now();
+      let rAF_ID = 0;
+      let frameCount = 0;
 
-         ctx.clearRect(0, 0, 720, 1280);
+      const renderFrame = () => {
+        const nowMs = performance.now();
+        const recTime = (nowMs - startMs) / 1000;
+        frameCount++;
 
-         // 1. V2 비디오 그리기
-         for (const item of overlayVideos) {
-            const c = item.clip;
-            if (recTime >= c.startTime && recTime <= c.startTime + (c.trimEnd - c.trimStart)) {
-               const vTime = c.trimStart + (recTime - c.startTime);
-               // 비디오 프레임 동기화를 위해 수동으로 currentTime 설정 (오프스크린 렌더링의 핵심)
-               if (Math.abs(item.el.currentTime - vTime) > 0.05) {
-                   item.el.currentTime = vTime;
-                   // seek 완료 대기 (실제 구현 시 약간의 비동기 대기 필요할 수 있음)
-                   await new Promise(r => setTimeout(r, 10)); 
-               }
+        if (recTime > maxDuration) {
+          recorder.stop();
+          cancelAnimationFrame(rAF_ID);
+          overlayVideos.forEach(v => { v.el.pause(); });
+          console.log(`[recordOverlayCanvas] 루프 종료. ${frameCount}프레임 처리됨.`);
+          return;
+        }
 
-               ctx.save();
-               
-               // 페이드 인/아웃 계산
-               let opacity = 1.0;
-               const clipLocalTime = recTime - c.startTime;
-               const duration = c.trimEnd - c.trimStart;
-               if (c.fadeIn && clipLocalTime < 1.0) opacity = clipLocalTime;
-               if (c.fadeOut && (duration - clipLocalTime) < 1.0) opacity = duration - clipLocalTime;
-               ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+        // 검은색 배경
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, 720, 1280);
 
-               // 위치 이동 및 스케일
-               const renderScale = c.scale || 1.0;
-               // translate는 영상의 0,0 좌표를 화면 x,y로 이동
-               ctx.translate(c.x || 0, c.y || 0);
+        // trackIndex 순으로 정렬하여 그리기 (V1 먼저, V2 나중에)
+        const sorted = [...overlayVideos].sort((a, b) => (a.clip.trackIndex || 0) - (b.clip.trackIndex || 0));
 
-               // 마스크(clip-path) 적용
-               if (c.maskShape === 'circle') {
-                  ctx.beginPath();
-                  ctx.arc((c.maskCenterX||0.5)*720, (c.maskCenterY||0.5)*1280, (c.maskRadiusX||0.5)*720, 0, Math.PI*2);
-                  ctx.clip();
-               } else if (c.maskShape === 'ellipse') {
-                  ctx.beginPath();
-                  ctx.ellipse((c.maskCenterX||0.5)*720, (c.maskCenterY||0.5)*1280, (c.maskRadiusX||0.4)*720, (c.maskRadiusY||0.25)*1280, 0, 0, Math.PI*2);
-                  ctx.clip();
-               }
+        for (const item of sorted) {
+          const c = item.clip;
+          const clipStart = c.startTime;
+          const clipEnd = c.startTime + (c.trimEnd - c.trimStart);
 
-               // 줌 애니메이션
-               let currentScale = renderScale;
-               if (c.animation === 'zoom-in') currentScale += (clipLocalTime / duration) * 0.2;
-               else if (c.animation === 'zoom-out') currentScale += (1.0 - clipLocalTime / duration) * 0.2;
-               
-               ctx.translate((c.cropX||0.5)*720, (c.cropY||0.5)*1280);
-               ctx.scale(currentScale, currentScale);
-               ctx.translate(-(c.cropX||0.5)*720, -(c.cropY||0.5)*1280);
-
-               // 비디오 원본 비율에 맞게 크롭 렌더링
-               const vAspect = item.el.videoWidth / item.el.videoHeight;
-               const cAspect = 720 / 1280;
-               let drawW = 720, drawH = 1280, offsetX = 0, offsetY = 0;
-               if (vAspect > cAspect) {
-                   drawW = 1280 * vAspect;
-                   offsetX = (720 - drawW) * (c.cropX || 0.5);
-               } else {
-                   drawH = 720 / vAspect;
-                   offsetY = (1280 - drawH) * (c.cropY || 0.5);
-               }
-               ctx.drawImage(item.el, offsetX, offsetY, drawW, drawH);
-               ctx.restore();
+          if (recTime >= clipStart && recTime <= clipEnd) {
+            if (!item.started) {
+              item.started = true;
+              item.el.play().catch(e => console.error("재생 실패:", e));
+              console.log(`[renderFrame] t=${recTime.toFixed(2)}s → 재생 시작: ${c.path.split(/[\\/]/).pop()}`);
             }
-         }
 
-         // 2. 텍스트 그리기 (단순 HTML Canvas FillText)
-         tClips.forEach(t => {
-            if (recTime >= t.startTime && recTime <= t.endTime) {
-               ctx.save();
-               ctx.font = `bold ${t.fontSize * 2}px Inter`;
-               ctx.fillStyle = t.color || "white";
-               ctx.textAlign = "center";
-               ctx.shadowColor = "rgba(0,0,0,0.8)";
-               ctx.shadowBlur = 10;
-               ctx.fillText(t.text, (t.x || 360) * 2, (t.y || 320) * 2);
-               ctx.restore();
+            // readyState 2(HAVE_CURRENT_DATA) 미만이면 스킵
+            if (item.el.readyState < 2) continue;
+
+            ctx.save();
+
+            // 페이드 인/아웃
+            const clipLocalTime = recTime - clipStart;
+            const duration = c.trimEnd - c.trimStart;
+            let opacity = 1.0;
+            if (c.fadeIn && clipLocalTime < 1.0) opacity = clipLocalTime;
+            if (c.fadeOut && (duration - clipLocalTime) < 1.0) opacity = duration - clipLocalTime;
+            ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+
+            // 마스크 적용 (CSS preview의 clipPath 로직과 동일하게 맞춤)
+            if (c.maskShape === 'circle') {
+              ctx.beginPath();
+              ctx.arc((c.maskCenterX ?? 0.5) * 720, (c.maskCenterY ?? 0.5) * 1280,
+                      (c.maskRadiusX ?? 0.5) * 720, 0, Math.PI * 2);
+              ctx.clip();
+            } else if (c.maskShape === 'ellipse') {
+              ctx.beginPath();
+              ctx.ellipse((c.maskCenterX ?? 0.5) * 720, (c.maskCenterY ?? 0.5) * 1280,
+                          (c.maskRadiusX ?? 0.4) * 720, (c.maskRadiusY ?? 0.25) * 1280,
+                          0, 0, Math.PI * 2);
+              ctx.clip();
+            } else {
+              // rectangle 또는 undefined → CSS의 inset()과 동일하게 동작
+              // (maskShape이 undefined여도 CSS preview는 항상 inset()을 적용함)
+              const hasAnyMask = (c.maskTop || 0) + (c.maskBottom || 0) + (c.maskLeft || 0) + (c.maskRight || 0) > 0;
+              if (hasAnyMask) {
+                const ml = (c.maskLeft ?? 0) * 720;
+                const mt = (c.maskTop ?? 0) * 1280;
+                const mr = (c.maskRight ?? 0) * 720;
+                const mb = (c.maskBottom ?? 0) * 1280;
+                ctx.beginPath(); // ← 누락되어 있었던 beginPath 추가!
+                ctx.rect(ml, mt, 720 - ml - mr, 1280 - mt - mb);
+                ctx.clip();
+              }
             }
-         });
 
-         recTime += step;
-         setTimeout(renderFrame, 1000 / fps); // 실제 시간에 맞춰 레코딩 진행
+            // X/Y 오프셋 이동
+            ctx.translate(c.x ?? 0, c.y ?? 0);
+
+            // 줌 애니메이션 + scale
+            let currentScale = c.scale ?? 1.0;
+            if (c.animation === 'zoom-in') currentScale += (clipLocalTime / duration) * 0.2;
+            else if (c.animation === 'zoom-out') currentScale += (1.0 - clipLocalTime / duration) * 0.2;
+
+            const pivotX = (c.cropX ?? 0.5) * 720;
+            const pivotY = (c.cropY ?? 0.5) * 1280;
+            ctx.translate(pivotX, pivotY);
+            ctx.scale(currentScale, currentScale);
+            ctx.translate(-pivotX, -pivotY);
+
+            // object-fit: cover 방식으로 비디오 그리기
+            const vw = item.el.videoWidth || 720;
+            const vh = item.el.videoHeight || 1280;
+            const vAspect = vw / vh;
+            const cAspect = 720 / 1280;
+
+            let drawW = 720, drawH = 1280, offsetX = 0, offsetY = 0;
+            if (vAspect > cAspect) {
+              drawH = 1280;
+              drawW = 1280 * vAspect;
+              offsetX = (720 - drawW) * (c.cropX ?? 0.5);
+            } else {
+              drawW = 720;
+              drawH = 720 / vAspect;
+              offsetY = (1280 - drawH) * (c.cropY ?? 0.5);
+            }
+
+            ctx.drawImage(item.el, offsetX, offsetY, drawW, drawH);
+            ctx.restore();
+
+          } else if (recTime > clipEnd && item.started && !item.el.paused) {
+            item.el.pause();
+          }
+        }
+
+        // 텍스트 그리기
+        for (const t of tClips) {
+          if (recTime >= t.startTime && recTime <= t.endTime) {
+            ctx.save();
+            ctx.font = `bold ${t.fontSize * 2}px Inter, sans-serif`;
+            ctx.fillStyle = t.color || "white";
+            ctx.textAlign = "center";
+            ctx.shadowColor = "rgba(0,0,0,0.8)";
+            ctx.shadowBlur = 10;
+            ctx.fillText(t.text, (t.x || 360) * 2, (t.y || 320) * 2);
+            ctx.restore();
+          }
+        }
+
+        if (frameCount % 30 === 0) {
+          const pct = Math.floor((recTime / maxDuration) * 100);
+          progressCallback(`오프스크린 캡처 중... ${pct}% (${recTime.toFixed(1)}s / ${maxDuration.toFixed(1)}s)`);
+        }
+
+        rAF_ID = requestAnimationFrame(renderFrame);
       };
 
-      renderFrame();
+      rAF_ID = requestAnimationFrame(renderFrame);
     });
   };
+
+
 
   return (
     <div className="editor-container">

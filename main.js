@@ -36,68 +36,81 @@ const fs = require('fs');
 // 프론트엔드에서 비디오 렌더링 요청을 보냈을 때 실행되는 리스너
 ipcMain.handle('render-video', async (event, clips, outputPath, overlayBase64) => {
   try {
-    console.log(`[Electron Main] 비디오 분석 요청 수신! (클립 수: ${clips.length})`);
+    console.log(`[Electron Main] 렌더링 요청 수신! (클립 수: ${clips.length})`);
+
+    // 1. 프론트엔드가 구워준 WebM 파일을 디스크에 저장
+    if (typeof overlayBase64 !== 'string' || !overlayBase64.startsWith('data:video/webm')) {
+      throw new Error('WebM 오버레이 데이터가 없거나 잘못된 형식입니다.');
+    }
+    const webmPath = path.join(__dirname, 'temp_rendered.webm');
+    const base64Data = overlayBase64.replace(/^data:video\/webm(?:;[^,]*)?;base64,/, '');
+    fs.writeFileSync(webmPath, base64Data, 'base64');
+    console.log('[Electron Main] WebM 임시 저장 완료:', webmPath);
+
+    // 2. V1 클립들에서 오디오를 추출하기 위한 FFmpeg 인풋 생성
+    // 각 클립의 trimStart~trimEnd 구간 오디오를 순서대로 concat
+    const { execFile } = require('child_process');
+    const ffmpegPath = 'd:\\workspace\\shortsMakers\\engine\\ffmpeg\\bin\\ffmpeg.exe';
+
+    // 클립들의 오디오를 concat하는 필터 문자열 생성
+    const v1Clips = clips.filter(c => (c.trackIndex || 0) === 0);
     
-    let overlayImagePath = "";
-    if (Array.isArray(overlayBase64) && overlayBase64.length > 0) {
-      const textClips = overlayBase64;
-      overlayImagePath = path.join(__dirname, 'temp.ass');
+    await new Promise((resolve, reject) => {
+      // 방법: WebM을 MP4로 변환하면서 V1 첫 번째 클립의 오디오를 추가
+      // 여러 클립이 있는 경우 복잡한 concat이 필요하므로 우선 V1[0] 오디오 사용
+      const audioClip = v1Clips[0];
       
-      let assContent = `[Script Info]
-ScriptType: v4.00+
-PlayResX: 720
-PlayResY: 1280
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Inter,24,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,1,7,10,10,10,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
-
-      function formatAssTime(seconds) {
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        const cs = Math.floor((seconds % 1) * 100);
-        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${cs.toString().padStart(2, '0')}`;
+      let ffmpegArgs;
+      if (audioClip) {
+        const aStart = audioClip.trimStart;
+        const aDuration = audioClip.trimEnd - audioClip.trimStart;
+        ffmpegArgs = [
+          '-y',
+          '-i', webmPath,                   // 입력 1: 프론트엔드 렌더 WebM (영상)
+          '-ss', String(aStart),
+          '-t', String(aDuration),
+          '-i', audioClip.path,             // 입력 2: V1 원본 영상 (오디오 추출용)
+          '-map', '0:v:0',                  // 영상은 WebM에서
+          '-map', '1:a:0',                  // 오디오는 V1 원본에서
+          '-c:v', 'libx264',               // H.264로 인코딩
+          '-preset', 'fast',
+          '-crf', '18',
+          '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-shortest',                      // 영상/오디오 중 짧은 쪽에 맞춤
+          outputPath
+        ];
+      } else {
+        // 오디오 없이 영상만 변환
+        ffmpegArgs = [
+          '-y',
+          '-i', webmPath,
+          '-c:v', 'libx264',
+          '-preset', 'fast',
+          '-crf', '18',
+          '-pix_fmt', 'yuv420p',
+          outputPath
+        ];
       }
 
-      textClips.forEach(clip => {
-        const start = formatAssTime(clip.startTime);
-        const end = formatAssTime(clip.endTime);
-        const x = Math.round(clip.x * 2);
-        const y = Math.round(clip.y * 2);
-        const fontSize = Math.round(clip.fontSize * 2);
-        
-        let bgr = "FFFFFF";
-        if (clip.color && clip.color.length === 7) {
-          bgr = clip.color.substring(5,7) + clip.color.substring(3,5) + clip.color.substring(1,3);
+      console.log('[Electron Main] FFmpeg 실행:', ffmpegPath, ffmpegArgs.join(' '));
+      execFile(ffmpegPath, ffmpegArgs, { maxBuffer: 1024 * 1024 * 500 }, (err, stdout, stderr) => {
+        if (err) {
+          console.error('[FFmpeg 오류]', stderr);
+          reject(new Error('FFmpeg 변환 실패: ' + stderr));
+        } else {
+          console.log('[FFmpeg 완료]', stderr.slice(-200));
+          resolve(null);
         }
-        
-        const cleanText = clip.text.replace(/\n/g, '\\N');
-        const trackIdx = clip.trackIndex || 0;
-        assContent += `Dialogue: ${trackIdx},${start},${end},Default,,0,0,0,,{\\pos(${x},${y})\\c&H${bgr}&\\fs${fontSize}}${cleanText}\n`;
       });
+    });
 
-      fs.writeFileSync(overlayImagePath, assContent, 'utf8');
-      console.log('[Electron Main] ASS 자막 파일 생성 완료:', overlayImagePath);
-    } else if (typeof overlayBase64 === 'string' && overlayBase64.startsWith('data:image')) {
-      overlayImagePath = path.join(__dirname, 'temp_overlay.png');
-      const base64Data = overlayBase64.replace(/^data:image\/png;base64,/, "");
-      fs.writeFileSync(overlayImagePath, base64Data, 'base64');
-      console.log('[Electron Main] 오버레이 PNG 임시 저장 완료:', overlayImagePath);
-    } else if (typeof overlayBase64 === 'string' && overlayBase64.startsWith('data:video/webm')) {
-      overlayImagePath = path.join(__dirname, 'temp_overlay.webm');
-      const base64Data = overlayBase64.replace(/^data:video\/webm;base64,/, "");
-      fs.writeFileSync(overlayImagePath, base64Data, 'base64');
-      console.log('[Electron Main] 오버레이 WebM 임시 저장 완료:', overlayImagePath);
-    }
-    
-    // C++ 엔진의 renderVideo 함수를 호출합니다. (세 번째 인자로 overlayImagePath 전달)
-    const result = engine.renderVideo(clips, outputPath, overlayImagePath);
-    console.log('[Electron Main] C++ 엔진 응답 완료:', result);
-    return result;
+    // 3. 임시 파일 정리
+    try { fs.unlinkSync(webmPath); } catch(e) {}
+
+    console.log('[Electron Main] 렌더링 완료! 저장 위치:', outputPath);
+    return { success: true, path: outputPath };
   } catch (err) {
     console.error('렌더링 중 오류 발생:', err);
     throw err;
@@ -144,5 +157,20 @@ ipcMain.handle('dialog:openDirectory', async () => {
       .map(file => path.join(dirPath, file));
       
     return videoFiles;
+  }
+});
+
+// 파일 저장 다이얼로그 호출용 리스너
+ipcMain.handle('dialog:saveFile', async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: '동영상 저장',
+    defaultPath: path.join(app.getPath('videos'), 'output_shorts.mp4'),
+    filters: [{ name: 'Videos', extensions: ['mp4'] }]
+  });
+  
+  if (canceled) {
+    return null;
+  } else {
+    return filePath;
   }
 });
