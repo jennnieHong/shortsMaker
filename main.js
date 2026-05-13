@@ -47,60 +47,83 @@ ipcMain.handle('render-video', async (event, clips, outputPath, overlayBase64) =
     fs.writeFileSync(webmPath, base64Data, 'base64');
     console.log('[Electron Main] WebM 임시 저장 완료:', webmPath);
 
-    // 2. V1 클립들에서 오디오를 추출하기 위한 FFmpeg 인풋 생성
-    // 각 클립의 trimStart~trimEnd 구간 오디오를 순서대로 concat
+    // 2. 모든 클립에서 오디오 트랙 추출 (음소거되지 않은 클립만)
     const { execFile } = require('child_process');
     const ffmpegPath = 'd:\\workspace\\shortsMakers\\engine\\ffmpeg\\bin\\ffmpeg.exe';
 
-    // 클립들의 오디오를 concat하는 필터 문자열 생성
-    const v1Clips = clips.filter(c => (c.trackIndex || 0) === 0);
-    
+    // 음소거되지 않은 클립 필터링
+    const audioClips = clips.filter(c => !c.muted);
+
     await new Promise((resolve, reject) => {
-      // 방법: WebM을 MP4로 변환하면서 V1 첫 번째 클립의 오디오를 추가
-      // 여러 클립이 있는 경우 복잡한 concat이 필요하므로 우선 V1[0] 오디오 사용
-      const audioClip = v1Clips[0];
-      
-      let ffmpegArgs;
-      if (audioClip) {
-        const aStart = audioClip.trimStart;
-        const aDuration = audioClip.trimEnd - audioClip.trimStart;
-        ffmpegArgs = [
-          '-y',
-          '-i', webmPath,                   // 입력 1: 프론트엔드 렌더 WebM (영상)
-          '-ss', String(aStart),
-          '-t', String(aDuration),
-          '-i', audioClip.path,             // 입력 2: V1 원본 영상 (오디오 추출용)
-          '-map', '0:v:0',                  // 영상은 WebM에서
-          '-map', '1:a:0',                  // 오디오는 V1 원본에서
-          '-c:v', 'libx264',               // H.264로 인코딩
-          '-preset', 'fast',
-          '-crf', '18',
-          '-pix_fmt', 'yuv420p',
-          '-c:a', 'aac',
-          '-b:a', '128k',
-          '-shortest',                      // 영상/오디오 중 짧은 쪽에 맞춤
-          outputPath
-        ];
-      } else {
+      if (audioClips.length === 0) {
         // 오디오 없이 영상만 변환
-        ffmpegArgs = [
-          '-y',
-          '-i', webmPath,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-crf', '18',
-          '-pix_fmt', 'yuv420p',
+        const ffmpegArgs = [
+          '-y', '-i', webmPath,
+          '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
+          '-an', // 오디오 없음
           outputPath
         ];
+        console.log('[Electron Main] 오디오 없이 렌더링:', ffmpegArgs.join(' '));
+        execFile(ffmpegPath, ffmpegArgs, { maxBuffer: 1024 * 1024 * 500 }, (err, stdout, stderr) => {
+          if (err) reject(new Error('FFmpeg 실패: ' + stderr)); else resolve(null);
+        });
+        return;
       }
 
-      console.log('[Electron Main] FFmpeg 실행:', ffmpegPath, ffmpegArgs.join(' '));
+      // 오디오 있는 클립들의 inputs 구성
+      const inputs = ['-y', '-i', webmPath];
+      audioClips.forEach(c => {
+        inputs.push('-ss', String(c.trimStart));
+        inputs.push('-t', String(c.trimEnd - c.trimStart));
+        inputs.push('-i', c.path);
+      });
+
+      // FFmpeg filter_complex 구성: 각 클립 오디오를 타임라인 위치에 배치하고 볼륨 조정 후 믹싱
+      const filterParts = [];
+      audioClips.forEach((c, i) => {
+        const inputIdx = i + 1; // 0번은 webm
+        const vol = c.volume ?? 1.0;
+        const delayMs = Math.round(c.startTime * 1000);
+        const trimDuration = c.trimEnd - c.trimStart;
+        filterParts.push(
+          `[${inputIdx}:a]` +
+          `volume=${vol.toFixed(2)},` +
+          `apad=pad_dur=${delayMs / 1000},` + // 시작 지점까지 무음 패딩
+          `atrim=0:${(delayMs / 1000) + trimDuration},` +
+          `asetpts=PTS-STARTPTS` +
+          `[a${i}]`
+        );
+      });
+
+      let audioMap;
+      if (audioClips.length === 1) {
+        audioMap = '[a0]';
+        // 단일 클립은 amix 불필요
+      } else {
+        const mixInputs = audioClips.map((_, i) => `[a${i}]`).join('');
+        filterParts.push(`${mixInputs}amix=inputs=${audioClips.length}:duration=longest:normalize=0[aout]`);
+        audioMap = '[aout]';
+      }
+
+      const ffmpegArgs = [
+        ...inputs,
+        '-filter_complex', filterParts.join(';'),
+        '-map', '0:v:0',   // 영상: WebM에서
+        '-map', audioMap,   // 오디오: 믹싱된 결과
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest',
+        outputPath
+      ];
+
+      console.log('[Electron Main] 멀티트랙 오디오 믹싱 FFmpeg 실행');
+      console.log('[FFmpeg Args]', ffmpegArgs.join(' '));
       execFile(ffmpegPath, ffmpegArgs, { maxBuffer: 1024 * 1024 * 500 }, (err, stdout, stderr) => {
         if (err) {
           console.error('[FFmpeg 오류]', stderr);
-          reject(new Error('FFmpeg 변환 실패: ' + stderr));
+          reject(new Error('FFmpeg 변환 실패: ' + stderr.slice(-500)));
         } else {
-          console.log('[FFmpeg 완료]', stderr.slice(-200));
+          console.log('[FFmpeg 완료]', stderr.slice(-300));
           resolve(null);
         }
       });

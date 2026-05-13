@@ -37,6 +37,9 @@ interface TimelineClip {
   fadeIn?: boolean;     // 1초 페이드 인
   fadeOut?: boolean;    // 1초 페이드 아웃
   animation?: 'none' | 'zoom-in' | 'zoom-out'; // 줌 애니메이션 프리셋
+  volume?: number;      // 오디오 볼륨 (0.0 ~ 1.0, 기본값 1.0)
+  muted?: boolean;      // 오디오 음소거 (기본값 false)
+  audioOnly?: boolean;  // 영상 없이 오디오만 사용 (기본값 false)
 }
 
 interface TextClip {
@@ -356,6 +359,10 @@ function App() {
         const localTime = clip.trimStart + (currentTime - clip.startTime);
         
         const handleSync = () => {
+          // 오디오 볼륨/음소거 동기화 (프리뷰 재생 시 적용)
+          video.muted = clip.muted ?? false;
+          video.volume = clip.volume ?? 1.0;
+
           // 오차가 0.15초 이상일 때만 seek (잦은 탐색 방지)
           if (Math.abs(video.currentTime - localTime) > 0.15) {
              video.currentTime = localTime;
@@ -1300,6 +1307,46 @@ function App() {
                       <option value="zoom-in">서서히 확대 (Zoom In)</option>
                       <option value="zoom-out">서서히 축소 (Zoom Out)</option>
                     </select>
+                  </div>
+                </div>
+
+                {/* 🔊 오디오 설정 */}
+                <div style={{ marginTop: '15px', background: 'var(--bg-dark)', padding: '10px', borderRadius: '4px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '12px', marginBottom: '10px', fontWeight: 'bold' }}>🔊 오디오 설정</div>
+                  
+                  {/* 음소거 토글 */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                    <span style={{ fontSize: '11px', color: '#888' }}>음소거</span>
+                    <button
+                      onClick={() => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, muted: !c.muted } : c))}
+                      style={{
+                        background: clip.muted ? '#e74c3c' : '#2ecc71',
+                        color: 'white', border: 'none', borderRadius: '4px',
+                        padding: '3px 10px', fontSize: '11px', cursor: 'pointer'
+                      }}
+                    >
+                      {clip.muted ? '🔇 음소거 중' : '🔊 소리 켜짐'}
+                    </button>
+                  </div>
+
+                  {/* 볼륨 슬라이더 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', opacity: clip.muted ? 0.4 : 1 }}>
+                    <span style={{ fontSize: '11px', color: '#888', minWidth: '30px' }}>볼륨</span>
+                    <input
+                      type="range" min="0" max="1" step="0.05"
+                      value={clip.volume ?? 1.0}
+                      disabled={clip.muted}
+                      onChange={(e) => setTimelineClips(prev => prev.map(c => c.id === clip.id ? { ...c, volume: parseFloat(e.target.value) } : c))}
+                      style={{ flex: 1, accentColor: 'var(--accent)' }}
+                    />
+                    <span style={{ fontSize: '11px', color: 'white', minWidth: '32px' }}>
+                      {Math.round((clip.volume ?? 1.0) * 100)}%
+                    </span>
+                  </div>
+
+                  {/* 트랙 오디오 정보 표시 */}
+                  <div style={{ fontSize: '10px', color: '#666', borderTop: '1px solid #333', paddingTop: '6px' }}>
+                    V{(clip.trackIndex || 0) + 1} 트랙 · {clip.muted ? '렌더링 시 오디오 제외' : `렌더링 시 ${Math.round((clip.volume ?? 1.0) * 100)}% 볼륨으로 믹싱`}
                   </div>
                 </div>
               </>
